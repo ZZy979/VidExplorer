@@ -18,3 +18,16 @@ pip install -r requirements.txt
 ```shell
 python -m videxplorer
 ```
+
+## 代码目录结构
+
+```
+VidExplorer/
+    videxplorer/        # 主包目录
+        __init__.py
+        __main__.py     # 应用入口
+        core/           # 核心业务逻辑
+        ui/             # UI 相关
+        utils/          # 工具函数
+    requirements.txt    # Python依赖
+```

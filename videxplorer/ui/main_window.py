@@ -22,8 +22,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('VidExplorer - 视频库')
         self.setMinimumSize(1200, 700)
 
-        # 设置样式
-        self.setup_style()
+        # 创建菜单栏
+        self.create_menu_bar()
 
         # 创建中央部件
         central_widget = QWidget(self)
@@ -38,7 +38,6 @@ class MainWindow(QMainWindow):
 
         # 统计信息栏
         self.stats_label = QLabel("未打开文件夹")
-        self.stats_label.setStyleSheet("color: #888; padding: 5px;")
         main_layout.addWidget(self.stats_label)
 
         # 视频网格
@@ -46,42 +45,15 @@ class MainWindow(QMainWindow):
         self.video_grid.video_clicked.connect(self.play_video)
         main_layout.addWidget(self.video_grid, stretch=1)
 
-    def setup_style(self):
-        """设置全局样式"""
-        self.setStyleSheet("""
-            QMainWindow {
-                background: #1a1a2e;
-            }
-            QPushButton {
-                background: #16213e;
-                color: #eee;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 6px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background: #0f3460;
-            }
-            QLineEdit {
-                background: #16213e;
-                color: #eee;
-                border: 1px solid #0f3460;
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border-color: #e94560;
-            }
-            QLabel {
-                color: #eee;
-            }
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-        """)
+    def create_menu_bar(self):
+        """创建菜单栏"""
+        menubar = self.menuBar()
+
+        # 文件菜单
+        file_menu = menubar.addMenu("文件")
+
+        exit_action = file_menu.addAction("退出")
+        exit_action.triggered.connect(self.close)
 
     def create_toolbar(self):
         """创建顶部工具栏"""
@@ -108,7 +80,6 @@ class MainWindow(QMainWindow):
 
         # 视频数量
         self.count_label = QLabel('0个视频', parent=self)
-        self.count_label.setStyleSheet("color: #888; padding: 0 10px;")
         layout.addWidget(self.count_label)
 
         return toolbar

@@ -22,7 +22,7 @@ class VideoGrid(QScrollArea):
         # 空状态标签
         self.empty_label = QLabel('请打开视频文件夹\n\n支持格式: mp4, avi, mkv, mov, wmv, flv, webm')
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color: #666; font-size: 18px; padding: 100px 0;")
+        self.empty_label.setStyleSheet("font-size: 14px; padding: 100px 0;")
         self.grid_layout.addWidget(self.empty_label, 0, 0)
 
         self.setWidget(self.container)

@@ -15,13 +15,13 @@ class VideoCard(QFrame):
         self.setFrameStyle(QFrame.Shape.Box)
         self.setStyleSheet("""
             QFrame {
-                background: #16213e;
-                border-radius: 10px;
-                border: 2px solid transparent;
+                border: 1px solid #ccc;
+                border-radius: 8px;
+                background: white;
             }
             QFrame:hover {
-                border-color: #e94560;
-                background: #1a2744;
+                border-color: #999;
+                background: #f5f5f5;
             }
         """)
         self.setFixedSize(220, 240)
@@ -37,8 +37,8 @@ class VideoCard(QFrame):
         self.thumb_container.setFixedHeight(150)
         self.thumb_container.setStyleSheet("""
             QWidget {
-                background: #0f1a30;
-                border-radius: 10px 10px 0 0;
+                background: #f0f0f0;
+                border-radius: 8px 8px 0 0;
             }
         """)
         thumb_layout = QVBoxLayout(self.thumb_container)
@@ -77,7 +77,6 @@ class VideoCard(QFrame):
         # 文件名
         name = get_file_name(file_path)
         name_label = QLabel(name)
-        name_label.setStyleSheet('color: #eee; font-weight: bold;')
         name_label.setWordWrap(True)
         name_label.setMaximumHeight(40)
         font = name_label.font()
@@ -88,7 +87,7 @@ class VideoCard(QFrame):
         # 文件大小
         size_str = get_file_size(file_path)
         size_label = QLabel(size_str)
-        size_label.setStyleSheet('color: #888; font-size: 11px;')
+        size_label.setStyleSheet('color: #666; font-size: 11px;')
         info_layout.addWidget(size_label)
 
         layout.addWidget(info_widget)
