@@ -1,16 +1,18 @@
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel, QWidget
 
-from videxplorer.utils.file import *
+from videxplorer.utils.file import get_file_name, get_file_size
+from videxplorer.utils.thumbnail_cache import thumbnail_cache
 
 
 class VideoCard(QFrame):
     """视频卡片组件"""
     clicked = Signal(str)
 
-    def __init__(self, file_path, parent=None):
+    def __init__(self, file_path, load_immediately=True, parent=None):
         super().__init__(parent)
         self.file_path = file_path
+        self.metadata = None
 
         self.setFrameStyle(QFrame.Shape.Box)
         self.setStyleSheet("""
@@ -48,6 +50,14 @@ class VideoCard(QFrame):
         self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setStyleSheet("background: transparent; font-size: 48px;")
         thumb_layout.addWidget(self.thumb_label)
+
+        # 加载指示器
+        self.loading_label = QLabel('⏳')
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("background: transparent; font-size: 32px;")
+        thumb_layout.addWidget(self.loading_label)
+        # 让 loading_label 覆盖在 thumb_label 上面（通过堆叠顺序）
+        self.loading_label.raise_()
 
         # 时长标签（覆盖在缩略图右下角）
         self.duration_label = QLabel()
@@ -92,13 +102,19 @@ class VideoCard(QFrame):
 
         layout.addWidget(info_widget)
 
-        # 异步加载缩略图和时长
-        QTimer.singleShot(10, self.load_metadata)
+        # 如果立即加载，则加载缩略图
+        if load_immediately:
+            QTimer.singleShot(10, self.load_thumbnail)
 
-    def load_metadata(self):
-        """加载缩略图和时长"""
-        # 加载缩略图
-        thumb = get_thumbnail(self.file_path)
+    def load_thumbnail(self):
+        """加载缩略图"""
+        self.loading_label.setText('⏳')
+        self.loading_label.show()
+
+        # 从缓存获取缩略图
+        thumb = thumbnail_cache.get_or_create(self.file_path, width=220, height=150)
+        self.loading_label.hide()
+
         if thumb:
             # 缩放并居中裁剪到 220x150
             pixmap = thumb.scaled(
@@ -118,12 +134,19 @@ class VideoCard(QFrame):
             self.thumb_label.setText("🎬")
             self.thumb_label.setStyleSheet("background: transparent; font-size: 48px;")
 
-        # 加载时长
-        duration = get_video_duration(self.file_path)
-        if duration:
-            self.duration_label.setText(format_duration(duration))
-        else:
-            self.duration_label.setText("")
+        # 如果有元数据，更新时长
+        if self.metadata and self.metadata.duration:
+            self.duration_label.setText(self.metadata.duration_str)
+
+    def update_metadata(self, metadata):
+        """更新元数据（从后台线程接收）"""
+        self.metadata = metadata
+        if metadata.duration:
+            self.duration_label.setText(metadata.duration_str)
+
+        # 如果缩略图还没加载，现在加载
+        if not self.thumb_label.pixmap():
+            QTimer.singleShot(10, self.load_thumbnail)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)

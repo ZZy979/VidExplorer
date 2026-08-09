@@ -10,7 +10,9 @@ class VideoGrid(QScrollArea):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.video_cards = []
+
+        # 视频路径到卡片的映射
+        self.card_map = {}
 
         # 容器
         self.container = QWidget()
@@ -30,29 +32,41 @@ class VideoGrid(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-    def set_videos(self, video_paths):
-        """设置视频列表"""
+    def set_videos_with_placeholder(self, video_paths):
+        """设置视频列表（先显示占位）"""
         self.clear_cards()
 
         if not video_paths:
-            self.empty_label.show()
+            self.show_empty()
             return
 
         self.empty_label.hide()
 
         # 计算列数（根据宽度动态调整，这里固定4列）
         cols = 4
+        self.card_map.clear()
+
         for idx, path in enumerate(video_paths):
             row, col = divmod(idx, cols)
-            card = VideoCard(path)
+            card = VideoCard(path, load_immediately=False)
             card.clicked.connect(self.video_clicked.emit)
             self.grid_layout.addWidget(card, row, col)
-            self.video_cards.append(card)
+            self.card_map[path] = card
+
+    def update_card_metadata(self, file_path, metadata):
+        """更新卡片的元数据（时长）"""
+        if card := self.card_map.get(file_path):
+            card.update_metadata(metadata)
+
+    def show_empty(self):
+        """显示空状态"""
+        self.clear_cards()
+        self.empty_label.show()
 
 
     def clear_cards(self):
         """清空所有卡片"""
-        for card in self.video_cards:
+        for card in self.card_map.values():
             self.grid_layout.removeWidget(card)
             card.deleteLater()
-        self.video_cards.clear()
+        self.card_map.clear()

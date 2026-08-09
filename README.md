@@ -29,5 +29,7 @@ VidExplorer/
         core/           # 核心业务逻辑
         ui/             # UI 相关
         utils/          # 工具函数
+    data/               # 运行时数据
+        thumbnails/     # 缩略图缓存
     requirements.txt    # Python依赖
 ```
