@@ -11,6 +11,7 @@ from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.tag_dialog import TagDialog
+from videxplorer.ui.tag_manager_dialog import TagManagerDialog
 from videxplorer.ui.video_grid import VideoGrid
 from videxplorer.utils.file import get_file_size, get_video_dimensions
 from videxplorer.utils.thumbnail_cache import thumbnail_cache
@@ -265,8 +266,11 @@ class MainWindow(QMainWindow):
 
     def open_tag_manager(self):
         """打开标签管理器"""
-        # TODO: 实现标签管理器（查看所有标签、重命名、删除等）
-        QMessageBox.information(self, '标签管理', '标签管理功能开发中...')
+        dialog = TagManagerDialog(self.db, self)
+        dialog.exec()
+        # 关闭后刷新当前视图，以更新卡片上的标签显示
+        if self.current_folder:
+            self.load_videos(self.current_folder)
 
     def clear_thumbnail_cache(self):
         """清空缩略图缓存"""

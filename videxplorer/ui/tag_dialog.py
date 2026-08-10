@@ -43,6 +43,7 @@ class TagDialog(QDialog):
             }
             QListWidget::item:selected {
                 background: #e3f2fd;
+                color: #000000;
             }
             QListWidget::item:hover {
                 background: #f5f5f5;
@@ -103,6 +104,10 @@ class TagDialog(QDialog):
             QListWidget::item {
                 padding: 5px;
                 border-radius: 3px;
+            }
+            QListWidget::item:selected {
+                background: #e3f2fd;
+                color: #000000;
             }
             QListWidget::item:hover {
                 background: #f5f5f5;
