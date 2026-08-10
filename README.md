@@ -27,9 +27,11 @@ VidExplorer/
         __init__.py
         __main__.py     # 应用入口
         core/           # 核心业务逻辑
+        models/         # 数据模型
         ui/             # UI 相关
         utils/          # 工具函数
     data/               # 运行时数据
+        videos.db       # SQLite数据库
         thumbnails/     # 缩略图缓存
     requirements.txt    # Python依赖
 ```

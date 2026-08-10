@@ -4,12 +4,15 @@ import subprocess
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QLineEdit,
-    QFileDialog, QMessageBox, QStatusBar, QProgressBar
+    QFileDialog, QMessageBox, QStatusBar, QProgressBar, QMenu
 )
 
 from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
+from videxplorer.models.database import VideoDatabase
+from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.video_grid import VideoGrid
+from videxplorer.utils.file import get_video_duration, get_file_size, get_video_dimensions
 from videxplorer.utils.thumbnail_cache import thumbnail_cache
 
 
@@ -19,9 +22,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.library = VideoLibrary()
+        self.db = VideoDatabase()
         self.current_folder = ''
         self.video_paths = []
         self.loader_thread = None
+        self.current_selected_path = ''
+        self.video_tags_cache = {}  # 缓存视频标签
 
         self.setWindowTitle('VidExplorer - 视频库')
         self.setMinimumSize(1200, 700)
@@ -46,7 +52,9 @@ class MainWindow(QMainWindow):
 
         # 视频网格
         self.video_grid = VideoGrid()
-        self.video_grid.video_clicked.connect(self.play_video)
+        self.video_grid.video_clicked.connect(self.on_video_clicked)
+        self.video_grid.video_tag_clicked.connect(self.on_tag_clicked)
+        self.video_grid.video_context_menu_requested.connect(self.show_video_context_menu)
         main_layout.addWidget(self.video_grid, stretch=1)
 
         # 状态栏
@@ -62,35 +70,6 @@ class MainWindow(QMainWindow):
         # 状态标签
         self.status_label = QLabel('就绪')
         self.status_bar.addWidget(self.status_label)
-
-    def create_menu_bar(self):
-        """创建菜单栏"""
-        menubar = self.menuBar()
-
-        # 文件菜单
-        file_menu = menubar.addMenu('文件')
-
-        clear_cache_action = file_menu.addAction('清空缩略图缓存')
-        clear_cache_action.triggered.connect(self.clear_thumbnail_cache)
-
-        exit_action = file_menu.addAction('退出')
-        exit_action.triggered.connect(self.close)
-
-    def clear_thumbnail_cache(self):
-        """清空缩略图缓存"""
-        reply = QMessageBox.question(
-            self,
-            '确认清空',
-            '确定要清空所有缩略图缓存吗？',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            thumbnail_cache.clear_cache()
-            QMessageBox.information(self, '完成', '缩略图缓存已清空')
-            # 刷新当前视图
-            if self.current_folder:
-                self.load_videos(self.current_folder)
 
     def create_toolbar(self):
         """创建顶部工具栏"""
@@ -109,6 +88,11 @@ class MainWindow(QMainWindow):
         refresh_btn.clicked.connect(self.refresh)
         layout.addWidget(refresh_btn)
 
+        # 标签管理按钮
+        self.tag_manager_btn = QPushButton("🏷️标签管理")
+        self.tag_manager_btn.clicked.connect(self.open_tag_manager)
+        layout.addWidget(self.tag_manager_btn)
+
         # 当前路径显示
         self.path_display = QLineEdit()
         self.path_display.setPlaceholderText('当前打开的文件夹路径...')
@@ -121,14 +105,25 @@ class MainWindow(QMainWindow):
 
         return toolbar
 
-    def open_folder(self):
-        """打开文件夹选择对话框"""
-        folder = QFileDialog.getExistingDirectory(
-            self, '选择视频文件夹', self.current_folder, QFileDialog.Option.ShowDirsOnly)
-        if folder:
-            self.current_folder = folder
-            self.path_display.setText(folder)
-            self.load_videos(folder)
+    def create_menu_bar(self):
+        """创建菜单栏"""
+        menubar = self.menuBar()
+
+        # 文件菜单
+        file_menu = menubar.addMenu('文件(&F)')
+        open_action = file_menu.addAction('打开文件夹...')
+        open_action.triggered.connect(self.open_folder)
+        file_menu.addSeparator()
+        exit_action = file_menu.addAction('退出(&X)')
+        exit_action.triggered.connect(self.close)
+
+        # 工具菜单
+        tools_menu = menubar.addMenu('工具(&T)')
+        clear_cache_action = tools_menu.addAction('清空缩略图缓存')
+        clear_cache_action.triggered.connect(self.clear_thumbnail_cache)
+        tools_menu.addSeparator()
+        tag_manager_action = tools_menu.addAction('标签管理')
+        tag_manager_action.triggered.connect(self.open_tag_manager)
 
     def load_videos(self, folder):
         """加载文件夹中的视频"""
@@ -141,6 +136,7 @@ class MainWindow(QMainWindow):
         # 清空当前显示
         self.video_grid.clear_cards()
         self.video_paths = []
+        self.video_tags_cache.clear()
 
         # 扫描文件（主线程快速完成）
         self.video_paths = self.library.scan_folder(folder)
@@ -155,8 +151,11 @@ class MainWindow(QMainWindow):
             self.status_label.setText('未找到视频文件')
             return
 
-        # 先显示所有卡片（缩略图占位）
-        self.video_grid.set_videos_with_placeholder(self.video_paths)
+        # 加载视频标签
+        self.load_video_tags(self.video_paths)
+
+        # 显示卡片
+        self.video_grid.set_videos_with_placeholder(self.video_paths, self.video_tags_cache)
         self.status_label.setText(f'正在加载 {count} 个视频的缩略图...')
 
         # 启动后台加载线程
@@ -167,10 +166,38 @@ class MainWindow(QMainWindow):
         self.loader_thread.progress.connect(self.on_loading_progress)
         self.loader_thread.start()
 
+    def save_video_to_database(self, file_path, metadata):
+        """保存视频信息到数据库"""
+        # 检查是否已存在
+        if self.db.get_video_by_path(file_path):
+            return
+
+        # 获取视频信息
+        duration = metadata.duration
+        width, height = get_video_dimensions(file_path)
+        file_size = get_file_size(file_path)
+
+        # 保存到数据库
+        metadata = {
+            'title': os.path.basename(file_path),
+            'duration': duration,
+            'width': width,
+            'height': height,
+            'file_size': file_size
+        }
+        self.db.add_or_update_video(file_path, metadata)
+
+    def load_video_tags(self, video_paths: list):
+        """批量加载视频标签"""
+        for path in video_paths:
+            tags = self.db.get_tags_for_video(path)
+            self.video_tags_cache[path] = tags
+
     def on_video_metadata_loaded(self, file_path, metadata):
         """单个视频元数据加载完成"""
         # 更新对应卡片的时长显示
         self.video_grid.update_card_metadata(file_path, metadata)
+        self.save_video_to_database(file_path, metadata)
 
     def on_all_videos_loaded(self):
         """所有视频加载完成"""
@@ -185,6 +212,74 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(current)
         self.status_label.setText(f'加载缩略图{current}/{total}')
 
+    def on_tag_clicked(self, tag):
+        """点击标签 - 搜索该标签"""
+        self.status_label.setText(f'搜索标签: {tag}')
+        # TODO: 实现搜索功能
+
+    def show_video_context_menu(self, file_path, pos):
+        """显示视频右键菜单"""
+        self.current_selected_path = file_path
+
+        menu = QMenu(self)
+        edit_tags_action = menu.addAction('编辑标签')
+        edit_tags_action.triggered.connect(lambda: self.edit_video_tags(file_path))
+
+        menu.addSeparator()
+        play_action = menu.addAction('播放')
+        play_action.triggered.connect(lambda: self.on_video_clicked(file_path))
+
+        menu.exec(pos)
+
+    def edit_video_tags(self, file_path):
+        """编辑视频标签"""
+        current_tags = self.db.get_tags_for_video(file_path)
+        all_tags = [tag['name'] for tag in self.db.get_all_tags()]
+
+        dialog = TagDialog(file_path, current_tags, all_tags, self.db, self)
+        if dialog.exec():
+            new_tags = dialog.get_tags()
+            # 保存到数据库
+            self.db.set_video_tags(file_path, new_tags)
+
+            # 更新缓存
+            self.video_tags_cache[file_path] = new_tags
+
+            # 更新界面
+            self.video_grid.update_card_tags(file_path, new_tags)
+
+            self.status_label.setText(f'已更新标签: {file_path}')
+
+    def open_tag_manager(self):
+        """打开标签管理器"""
+        # TODO: 实现标签管理器（查看所有标签、重命名、删除等）
+        QMessageBox.information(self, '标签管理', '标签管理功能开发中...')
+
+    def clear_thumbnail_cache(self):
+        """清空缩略图缓存"""
+        reply = QMessageBox.question(
+            self,
+            '确认清空',
+            '确定要清空所有缩略图缓存吗？',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            thumbnail_cache.clear_cache()
+            QMessageBox.information(self, '完成', '缩略图缓存已清空')
+            # 刷新当前视图
+            if self.current_folder:
+                self.load_videos(self.current_folder)
+
+    def open_folder(self):
+        """打开文件夹选择对话框"""
+        folder = QFileDialog.getExistingDirectory(
+            self, '选择视频文件夹', self.current_folder, QFileDialog.Option.ShowDirsOnly)
+        if folder:
+            self.current_folder = folder
+            self.path_display.setText(folder)
+            self.load_videos(folder)
+
     def refresh(self):
         """刷新当前文件夹"""
         if self.current_folder:
@@ -192,8 +287,11 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, '提示', '请先打开一个视频文件夹')
 
-    def play_video(self, video_path):
+    def on_video_clicked(self, video_path):
         """播放视频"""
+        # 更新播放计数
+        self.db.update_play_count(video_path)
+
         try:
             if platform.system() == 'Windows':
                 os.startfile(video_path)

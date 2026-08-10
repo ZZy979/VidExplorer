@@ -20,16 +20,26 @@ def get_file_extension(file_path):
 
 
 def get_file_size(file_path):
+    """获取文件大小（字节）"""
+    try:
+        return os.path.getsize(file_path)
+    except:
+        return None
+
+
+def get_file_size_readable(file_path):
     """获取文件大小（可读格式）"""
     try:
-        size = os.path.getsize(file_path)
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size < 1024.0:
-                return f'{size:.1f} {unit}'
-            size /= 1024.0
-        return f'{size:.1f} PB'
+        return format_file_size(os.path.getsize(file_path))
     except:
         return '未知大小'
+
+def format_file_size(size):
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size < 1024.0:
+            return f'{size:.1f} {unit}'
+        size /= 1024.0
+    return f'{size:.1f} PB'
 
 
 def get_video_duration(file_path):
@@ -50,6 +60,25 @@ def get_video_duration(file_path):
     except Exception as e:
         logging.error(e)
         return None
+
+def get_video_dimensions(file_path: str):
+    """获取视频尺寸 (width, height)"""
+    try:
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            return None, None
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        cap.release()
+
+        if width > 0 and height > 0:
+            return width, height
+        return None, None
+    except Exception as e:
+        logging.error(e)
+        return None, None
 
 
 def format_duration(seconds):

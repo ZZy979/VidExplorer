@@ -1,18 +1,21 @@
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel, QWidget
 
-from videxplorer.utils.file import get_file_name, get_file_size
+from videxplorer.ui.tag_manager_widget import TagDisplayWidget
+from videxplorer.utils.file import get_file_name, get_file_size_readable
 from videxplorer.utils.thumbnail_cache import thumbnail_cache
 
 
 class VideoCard(QFrame):
     """视频卡片组件"""
     clicked = Signal(str)
+    tag_clicked = Signal(str)  # 点击标签
 
     def __init__(self, file_path, load_immediately=True, parent=None):
         super().__init__(parent)
         self.file_path = file_path
         self.metadata = None
+        self.tags = []
 
         self.setFrameStyle(QFrame.Shape.Box)
         self.setStyleSheet("""
@@ -26,10 +29,10 @@ class VideoCard(QFrame):
                 background: #f5f5f5;
             }
         """)
-        self.setFixedSize(220, 240)
+        self.setFixedSize(220, 280)
         self.setCursor(Qt.PointingHandCursor)
 
-        # 布局
+        # 主布局
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -95,15 +98,35 @@ class VideoCard(QFrame):
         info_layout.addWidget(name_label)
 
         # 文件大小
-        size_str = get_file_size(file_path)
+        size_str = get_file_size_readable(file_path)
         size_label = QLabel(size_str)
-        size_label.setStyleSheet('color: #666; font-size: 11px;')
+        size_label.setStyleSheet("font-size: 11px; color: #666;")
         info_layout.addWidget(size_label)
+
+        # 标签显示区域
+        self.tag_display = TagDisplayWidget()
+        self.tag_display.tag_clicked.connect(self.tag_clicked.emit)
+        self.tag_display.setMaximumHeight(30)
+        info_layout.addWidget(self.tag_display)
 
         layout.addWidget(info_widget)
 
         # 如果立即加载，则加载缩略图
         if load_immediately:
+            QTimer.singleShot(10, self.load_thumbnail)
+
+    def set_tags(self, tags):
+        """设置标签"""
+        self.tags = tags
+        self.tag_display.set_tags(tags)
+
+    def update_metadata(self, metadata):
+        """更新元数据（从后台线程接收）"""
+        self.metadata = metadata
+        if metadata.duration:
+            self.duration_label.setText(metadata.duration_str)
+
+        if not self.thumb_label.pixmap():
             QTimer.singleShot(10, self.load_thumbnail)
 
     def load_thumbnail(self):
@@ -137,16 +160,6 @@ class VideoCard(QFrame):
         # 如果有元数据，更新时长
         if self.metadata and self.metadata.duration:
             self.duration_label.setText(self.metadata.duration_str)
-
-    def update_metadata(self, metadata):
-        """更新元数据（从后台线程接收）"""
-        self.metadata = metadata
-        if metadata.duration:
-            self.duration_label.setText(metadata.duration_str)
-
-        # 如果缩略图还没加载，现在加载
-        if not self.thumb_label.pixmap():
-            QTimer.singleShot(10, self.load_thumbnail)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
