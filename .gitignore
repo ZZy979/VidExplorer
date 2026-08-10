@@ -1,6 +1,9 @@
 # PyCharm
 /.idea/
 
+# Visual Studio Code
+/.vscode/
+
 # Python
 __pycache__/
 

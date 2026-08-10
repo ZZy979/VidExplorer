@@ -12,7 +12,7 @@ from videxplorer.core.loader import VideoLoaderThread
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.video_grid import VideoGrid
-from videxplorer.utils.file import get_video_duration, get_file_size, get_video_dimensions
+from videxplorer.utils.file import get_file_size, get_video_dimensions
 from videxplorer.utils.thumbnail_cache import thumbnail_cache
 
 
@@ -24,6 +24,7 @@ class MainWindow(QMainWindow):
         self.library = VideoLibrary()
         self.db = VideoDatabase()
         self.current_folder = ''
+        self.folder_stack = []  # 文件夹导航栈（用于返回上级）
         self.video_paths = []
         self.loader_thread = None
         self.current_selected_path = ''
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         self.video_grid.video_clicked.connect(self.on_video_clicked)
         self.video_grid.video_tag_clicked.connect(self.on_tag_clicked)
         self.video_grid.video_context_menu_requested.connect(self.show_video_context_menu)
+        self.video_grid.folder_opened.connect(self.on_folder_opened)
         main_layout.addWidget(self.video_grid, stretch=1)
 
         # 状态栏
@@ -88,6 +90,12 @@ class MainWindow(QMainWindow):
         refresh_btn.clicked.connect(self.refresh)
         layout.addWidget(refresh_btn)
 
+        # 返回上级按钮
+        self.up_btn = QPushButton('⬆返回上级')
+        self.up_btn.setEnabled(False)
+        self.up_btn.clicked.connect(self.go_up)
+        layout.addWidget(self.up_btn)
+
         # 标签管理按钮
         self.tag_manager_btn = QPushButton("🏷️标签管理")
         self.tag_manager_btn.clicked.connect(self.open_tag_manager)
@@ -113,6 +121,9 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu('文件(&F)')
         open_action = file_menu.addAction('打开文件夹...')
         open_action.triggered.connect(self.open_folder)
+        self.up_action = file_menu.addAction('返回上级')
+        self.up_action.triggered.connect(self.go_up)
+        self.up_action.setEnabled(False)
         file_menu.addSeparator()
         exit_action = file_menu.addAction('退出(&X)')
         exit_action.triggered.connect(self.close)
@@ -126,7 +137,7 @@ class MainWindow(QMainWindow):
         tag_manager_action.triggered.connect(self.open_tag_manager)
 
     def load_videos(self, folder):
-        """加载文件夹中的视频"""
+        """加载当前文件夹中的子文件夹和视频（不递归）"""
         # 停止之前的加载线程
         if self.loader_thread and self.loader_thread.isRunning():
             self.loader_thread.stop()
@@ -138,25 +149,27 @@ class MainWindow(QMainWindow):
         self.video_paths = []
         self.video_tags_cache.clear()
 
-        # 扫描文件（主线程快速完成）
-        self.video_paths = self.library.scan_folder(folder)
+        # 列出当前文件夹下的子文件夹和视频（不递归）
+        folder_items, self.video_paths = self.library.list_folder(folder)
+        folder_count = len(folder_items)
+        video_count = len(self.video_paths)
 
         # 更新统计信息
-        count = len(self.video_paths)
-        self.count_label.setText(f'{count}个视频')
-        self.stats_label.setText(f'{folder}  -  共{count}个视频')
-
-        if count == 0:
-            self.video_grid.show_empty()
-            self.status_label.setText('未找到视频文件')
-            return
+        self.count_label.setText(f'{video_count}个视频')
+        self.stats_label.setText(f'{folder}  -  {folder_count}个文件夹 / {video_count}个视频')
 
         # 加载视频标签
         self.load_video_tags(self.video_paths)
 
-        # 显示卡片
-        self.video_grid.set_videos_with_placeholder(self.video_paths, self.video_tags_cache)
-        self.status_label.setText(f'正在加载 {count} 个视频的缩略图...')
+        # 显示文件夹和视频卡片
+        self.video_grid.set_entries(folder_items, self.video_paths, self.video_tags_cache)
+
+        if video_count == 0:
+            self.status_label.setText('此文件夹下没有视频文件')
+            self.progress_bar.setVisible(False)
+            return
+
+        self.status_label.setText(f'正在加载 {video_count} 个视频的缩略图...')
 
         # 启动后台加载线程
         self.loader_thread = VideoLoaderThread()
@@ -276,9 +289,37 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(
             self, '选择视频文件夹', self.current_folder, QFileDialog.Option.ShowDirsOnly)
         if folder:
+            self.folder_stack.clear()
             self.current_folder = folder
             self.path_display.setText(folder)
+            self.update_up_button_state()
             self.load_videos(folder)
+
+    def on_folder_opened(self, folder_path):
+        """双击文件夹卡片，进入子文件夹"""
+        self.folder_stack.append(self.current_folder)
+        self.current_folder = folder_path
+        self.path_display.setText(folder_path)
+        self.update_up_button_state()
+        self.load_videos(folder_path)
+
+    def go_up(self):
+        """返回上级文件夹"""
+        if not self.folder_stack:
+            return
+        parent = self.folder_stack.pop()
+        self.current_folder = parent
+        self.path_display.setText(parent)
+        self.update_up_button_state()
+        self.load_videos(parent)
+
+    def update_up_button_state(self):
+        """根据导航栈更新返回上级按钮/菜单状态"""
+        has_parent = bool(self.folder_stack)
+        if hasattr(self, 'up_btn'):
+            self.up_btn.setEnabled(has_parent)
+        if hasattr(self, 'up_action'):
+            self.up_action.setEnabled(has_parent)
 
     def refresh(self):
         """刷新当前文件夹"""

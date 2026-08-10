@@ -18,31 +18,49 @@ class VideoLibrary:
         """停止扫描"""
         self._stop_scan = True
 
-    def scan_folder(self, path, callback=None):
-        """扫描文件夹，返回所有视频文件的完整路径列表"""
-        video_files = []
+    def list_folder(self, path):
+        """列出文件夹下的子文件夹和视频文件（不递归）。
+
+        返回 (folder_items, video_files)：
+        - folder_items: [(子文件夹完整路径, 其中直接包含的视频数量), ...]
+        - video_files: [视频文件完整路径, ...]
+        """
+        folders = []  # [(path, video_count)]
+        videos = []
 
         if not os.path.exists(path):
-            return video_files
+            return folders, videos
 
-        self._stop_scan = False
+        try:
+            entries = os.listdir(path)
+        except OSError:
+            return folders, videos
 
-        for root, dirs, files in os.walk(path):
-            if self._stop_scan:
-                break
-            for file in files:
-                if self._stop_scan:
-                    break
-                ext = os.path.splitext(file)[1].lower()
+        for name in entries:
+            full_path = os.path.join(path, name)
+            if os.path.isdir(full_path):
+                folders.append((full_path, self._count_direct_videos(full_path)))
+            elif os.path.isfile(full_path):
+                ext = os.path.splitext(name)[1].lower()
                 if ext in self.VIDEO_EXTENSIONS:
-                    full_path = os.path.join(root, file)
-                    video_files.append(full_path)
+                    videos.append(full_path)
 
-            # 回调检查是否停止
-            if callback and callback(len(video_files)):
-                break
+        # 按名称排序
+        folders.sort(key=lambda x: os.path.basename(x[0]).lower())
+        videos.sort(key=lambda x: os.path.basename(x).lower())
 
-        # 按文件名排序
-        video_files.sort(key=lambda x: os.path.basename(x).lower())
+        return folders, videos
 
-        return video_files
+    @staticmethod
+    def _count_direct_videos(folder_path):
+        """统计文件夹内直接包含的视频文件数量（不递归）"""
+        count = 0
+        try:
+            for name in os.listdir(folder_path):
+                full_path = os.path.join(folder_path, name)
+                ext = os.path.splitext(name)[1].lower()
+                if os.path.isfile(full_path) and ext in VideoLibrary.VIDEO_EXTENSIONS:
+                    count += 1
+        except OSError:
+            pass
+        return count

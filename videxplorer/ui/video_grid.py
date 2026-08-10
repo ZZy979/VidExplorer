@@ -1,6 +1,7 @@
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import QScrollArea, QWidget, QGridLayout, QLabel
 
+from .folder_card import FolderCard
 from .video_card import VideoCard
 
 
@@ -9,6 +10,7 @@ class VideoGrid(QScrollArea):
     video_clicked = Signal(str)  # 发送视频路径
     video_tag_clicked = Signal(str)
     video_context_menu_requested = Signal(str, object)
+    folder_opened = Signal(str)  # 双击文件夹，发送文件夹路径
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,22 +40,32 @@ class VideoGrid(QScrollArea):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
 
-    def set_videos_with_placeholder(self, video_paths, tags_cache=None):
-        """设置视频列表（先显示占位）"""
+    def set_entries(self, folders, video_paths, tags_cache=None):
+        """设置网格内容：文件夹卡片 + 视频卡片
+
+        folders: [(文件夹路径, 视频数量), ...]
+        video_paths: [视频文件路径, ...]
+        """
         self.clear_cards()
-
-        if not video_paths:
-            self.show_empty()
-            return
-
         self.empty_label.hide()
-
-        # 计算列数（根据宽度动态调整，这里固定4列）
-        cols = 4
-        self.card_map.clear()
         tags_cache = tags_cache or {}
 
-        for idx, path in enumerate(video_paths):
+        # 计算列数
+        # TODO 根据宽度动态调整
+        cols = 4
+        idx = 0
+
+        # 文件夹卡片
+        for folder_path, video_count in folders:
+            row, col = divmod(idx, cols)
+            card = FolderCard(folder_path, video_count)
+            card.folder_opened.connect(self.folder_opened.emit)
+            self.grid_layout.addWidget(card, row, col)
+            self.card_map[f'folder:{folder_path}'] = card
+            idx += 1
+
+        # 视频卡片
+        for path in video_paths:
             row, col = divmod(idx, cols)
             card = VideoCard(path, load_immediately=False)
             card.clicked.connect(self.video_clicked.emit)
@@ -65,6 +77,16 @@ class VideoGrid(QScrollArea):
 
             self.grid_layout.addWidget(card, row, col)
             self.card_map[path] = card
+            idx += 1
+
+        # 空状态
+        if idx == 0:
+            self.empty_label.setText('此文件夹为空\n\n没有找到视频文件或子文件夹')
+            self.empty_label.show()
+
+    def set_videos_with_placeholder(self, video_paths, tags_cache=None):
+        """兼容旧接口：仅显示视频（无文件夹卡片）"""
+        self.set_entries([], video_paths, tags_cache)
 
     def update_card_metadata(self, file_path, metadata):
         """更新卡片的元数据（时长）"""
