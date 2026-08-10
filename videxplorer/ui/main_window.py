@@ -164,8 +164,12 @@ class MainWindow(QMainWindow):
         # 加载视频标签
         self.load_video_tags(self.video_paths)
 
+        # 加载播放次数
+        play_count_cache = self.load_video_play_counts(self.video_paths)
+
         # 显示文件夹和视频卡片
-        self.video_grid.set_entries(folder_items, self.video_paths, self.video_tags_cache)
+        self.video_grid.set_entries(
+            folder_items, self.video_paths, self.video_tags_cache, play_count_cache)
 
         if video_count == 0:
             self.status_label.setText('此文件夹下没有视频文件')
@@ -209,11 +213,24 @@ class MainWindow(QMainWindow):
             tags = self.db.get_tags_for_video(path)
             self.video_tags_cache[path] = tags
 
+    def load_video_play_counts(self, video_paths: list) -> dict:
+        """批量加载视频播放次数"""
+        counts = {}
+        for path in video_paths:
+            video = self.db.get_video_by_path(path)
+            if video and video.get('play_count') is not None:
+                counts[path] = video['play_count']
+        return counts
+
     def on_video_metadata_loaded(self, file_path, metadata):
         """单个视频元数据加载完成"""
         # 更新对应卡片的时长显示
         self.video_grid.update_card_metadata(file_path, metadata)
         self.save_video_to_database(file_path, metadata)
+        # 更新播放次数显示（新入库视频为 0）
+        video = self.db.get_video_by_path(file_path)
+        if video:
+            self.video_grid.update_card_play_count(file_path, video.get('play_count'))
 
     def on_all_videos_loaded(self):
         """所有视频加载完成"""
@@ -376,6 +393,10 @@ class MainWindow(QMainWindow):
         """播放视频"""
         # 更新播放计数
         self.db.update_play_count(video_path)
+        # 更新卡片播放次数显示
+        video = self.db.get_video_by_path(video_path)
+        if video:
+            self.video_grid.update_card_play_count(video_path, video.get('play_count'))
 
         try:
             if platform.system() == 'Windows':

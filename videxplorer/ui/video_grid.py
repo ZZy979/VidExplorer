@@ -41,11 +41,12 @@ class VideoGrid(QScrollArea):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
 
-    def set_entries(self, folders, video_paths, tags_cache=None):
+    def set_entries(self, folders, video_paths, tags_cache=None, play_count_cache=None):
         """设置网格内容：文件夹卡片 + 视频卡片
 
         folders: [(文件夹路径, 视频数量), ...]
         video_paths: [视频文件路径, ...]
+        play_count_cache: {视频路径: 播放次数}
         """
         self.clear_cards()
         self.empty_label.hide()
@@ -76,6 +77,10 @@ class VideoGrid(QScrollArea):
             if path in tags_cache:
                 card.set_tags(tags_cache[path])
 
+            # 设置播放次数
+            if play_count_cache and path in play_count_cache:
+                card.set_play_count(play_count_cache[path])
+
             self.grid_layout.addWidget(card, row, col)
             self.card_map[path] = card
             idx += 1
@@ -99,6 +104,12 @@ class VideoGrid(QScrollArea):
         card = self.card_map.get(file_path)
         if card:
             card.set_tags(tags)
+
+    def update_card_play_count(self, file_path, count):
+        """更新卡片的播放次数"""
+        card = self.card_map.get(file_path)
+        if card:
+            card.set_play_count(count)
 
     def show_context_menu(self, pos):
         """显示右键菜单"""

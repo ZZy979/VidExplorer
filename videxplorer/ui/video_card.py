@@ -16,6 +16,7 @@ class VideoCard(QFrame):
         self.file_path = file_path
         self.metadata = None
         self.tags = []
+        self.play_count = None
 
         self.setFrameStyle(QFrame.Shape.Box)
         self.setStyleSheet("""
@@ -103,6 +104,11 @@ class VideoCard(QFrame):
         size_label.setStyleSheet("font-size: 11px; color: #666;")
         info_layout.addWidget(size_label)
 
+        # 播放次数
+        self.play_label = QLabel()
+        self.play_label.setStyleSheet("font-size: 11px; color: #666;")
+        info_layout.addWidget(self.play_label)
+
         # 标签显示区域
         self.tag_display = TagDisplayWidget()
         self.tag_display.tag_clicked.connect(self.tag_clicked.emit)
@@ -119,6 +125,14 @@ class VideoCard(QFrame):
         """设置标签"""
         self.tags = tags
         self.tag_display.set_tags(tags)
+
+    def set_play_count(self, count):
+        """设置播放次数"""
+        self.play_count = count
+        if count is not None:
+            self.play_label.setText(f'▶ 播放 {count} 次')
+        else:
+            self.play_label.setText('')
 
     def update_metadata(self, metadata):
         """更新元数据（从后台线程接收）"""
