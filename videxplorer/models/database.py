@@ -401,6 +401,58 @@ class VideoDatabase:
             logging.error(f'set_video_tags 失败: {e}')
             return False
 
+    def _get_or_create_video_id_in_conn(self, db, file_path):
+        """在指定连接/事务中获取或创建视频ID（用于批量操作）"""
+        query = QSqlQuery(db)
+        query.prepare('SELECT id FROM videos WHERE file_path = ?')
+        query.addBindValue(file_path)
+        if query.exec() and query.next():
+            return query.value(0)
+
+        query = QSqlQuery(db)
+        query.prepare('INSERT INTO videos (file_path, title) VALUES (?, ?)')
+        query.addBindValue(file_path)
+        query.addBindValue(os.path.basename(file_path))
+        if query.exec():
+            return query.lastInsertId()
+        logging.error(f'创建视频记录失败: {query.lastError().text()}')
+        return None
+
+    def add_tags_to_videos(self, video_paths, tag_names):
+        """为多个视频批量添加标签（只添加，不覆盖已有标签）"""
+        if not video_paths or not tag_names:
+            return True
+
+        db = self.get_connection()
+        if not db.transaction():
+            logging.error(f'开启事务失败: {db.lastError().text()}')
+            return False
+
+        try:
+            for file_path in video_paths:
+                video_id = self._get_or_create_video_id_in_conn(db, file_path)
+                if video_id is None:
+                    continue
+                for tag_name in tag_names:
+                    if not tag_name.strip():
+                        continue
+                    tag_id = self._get_or_create_tag_in_conn(db, tag_name.strip())
+                    if tag_id is None:
+                        continue
+                    query = QSqlQuery(db)
+                    query.prepare('INSERT OR IGNORE INTO video_tags (video_id, tag_id) VALUES (?, ?)')
+                    query.addBindValue(video_id)
+                    query.addBindValue(tag_id)
+                    if not query.exec():
+                        logging.error(f'批量添加标签失败: {query.lastError().text()}')
+
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            logging.error(f'add_tags_to_videos 失败: {e}')
+            return False
+
     def get_videos_with_tags(self):
         """获取所有视频及其标签"""
         db = self.get_connection()

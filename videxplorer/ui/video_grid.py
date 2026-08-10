@@ -10,6 +10,7 @@ class VideoGrid(QScrollArea):
     video_clicked = Signal(str)  # 发送视频路径
     video_tag_clicked = Signal(str)
     video_context_menu_requested = Signal(str, object)
+    folder_context_menu_requested = Signal(str, object)  # 文件夹右键菜单
     folder_opened = Signal(str)  # 双击文件夹，发送文件夹路径
 
     def __init__(self, parent=None):
@@ -108,6 +109,10 @@ class VideoGrid(QScrollArea):
                 # 转换坐标到全局
                 global_pos = self.mapToGlobal(pos)
                 self.video_context_menu_requested.emit(widget.file_path, global_pos)
+                return
+            if isinstance(widget, FolderCard):
+                global_pos = self.mapToGlobal(pos)
+                self.folder_context_menu_requested.emit(widget.folder_path, global_pos)
                 return
             widget = widget.parent()
 

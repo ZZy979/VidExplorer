@@ -64,3 +64,18 @@ class VideoLibrary:
         except OSError:
             pass
         return count
+
+    def list_videos_recursive(self, path):
+        """递归获取文件夹下所有视频文件的完整路径"""
+        videos = []
+        if not os.path.exists(path):
+            return videos
+
+        for root, dirs, files in os.walk(path):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in self.VIDEO_EXTENSIONS:
+                    videos.append(os.path.join(root, file))
+
+        videos.sort(key=lambda x: os.path.basename(x).lower())
+        return videos

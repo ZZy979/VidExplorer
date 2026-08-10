@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
 from videxplorer.models.database import VideoDatabase
+from videxplorer.ui.batch_tag_dialog import BatchTagDialog
 from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.tag_manager_dialog import TagManagerDialog
 from videxplorer.ui.video_grid import VideoGrid
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self.video_grid.video_clicked.connect(self.on_video_clicked)
         self.video_grid.video_tag_clicked.connect(self.on_tag_clicked)
         self.video_grid.video_context_menu_requested.connect(self.show_video_context_menu)
+        self.video_grid.folder_context_menu_requested.connect(self.show_folder_context_menu)
         self.video_grid.folder_opened.connect(self.on_folder_opened)
         main_layout.addWidget(self.video_grid, stretch=1)
 
@@ -244,6 +246,44 @@ class MainWindow(QMainWindow):
         play_action.triggered.connect(lambda: self.on_video_clicked(file_path))
 
         menu.exec(pos)
+
+    def show_folder_context_menu(self, folder_path, pos):
+        """显示文件夹右键菜单"""
+        menu = QMenu(self)
+
+        open_action = menu.addAction('打开')
+        open_action.triggered.connect(lambda: self.on_folder_opened(folder_path))
+
+        batch_action = menu.addAction('批量添加标签')
+        batch_action.triggered.connect(lambda: self.batch_add_tags_to_folder(folder_path))
+
+        menu.exec(pos)
+
+    def batch_add_tags_to_folder(self, folder_path):
+        """为该文件夹中的所有视频批量添加标签（只添加，不覆盖）"""
+        video_paths = self.library.list_videos_recursive(folder_path)
+        if not video_paths:
+            QMessageBox.information(self, '提示', '该文件夹下没有视频文件')
+            return
+
+        all_tags = [tag['name'] for tag in self.db.get_all_tags()]
+        dialog = BatchTagDialog(folder_path, len(video_paths), all_tags, self)
+        if not dialog.exec():
+            return
+
+        tag_names = dialog.get_tags()
+        if not tag_names:
+            QMessageBox.information(self, '提示', '未输入任何标签')
+            return
+
+        if self.db.add_tags_to_videos(video_paths, tag_names):
+            self.status_label.setText(
+                f'已为 {len(video_paths)} 个视频添加标签: {", ".join(tag_names)}')
+            # 刷新当前视图以更新卡片上的标签显示
+            if self.current_folder:
+                self.load_videos(self.current_folder)
+        else:
+            QMessageBox.warning(self, '失败', '批量添加标签失败')
 
     def edit_video_tags(self, file_path):
         """编辑视频标签"""
