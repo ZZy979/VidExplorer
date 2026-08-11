@@ -2,6 +2,7 @@ import os
 import platform
 import subprocess
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QLineEdit,
     QFileDialog, QMessageBox, QStatusBar, QProgressBar, QMenu
@@ -31,6 +32,12 @@ class MainWindow(QMainWindow):
         self.loader_thread = None
         self.current_selected_path = ''
         self.video_tags_cache = {}  # 缓存视频标签
+
+        # 搜索防抖定时器
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(250)
+        self.search_timer.timeout.connect(self._run_search_from_box)
 
         self.setWindowTitle('VidExplorer - 视频库')
         self.setMinimumSize(1200, 700)
@@ -104,15 +111,13 @@ class MainWindow(QMainWindow):
         self.tag_manager_btn.clicked.connect(self.open_tag_manager)
         layout.addWidget(self.tag_manager_btn)
 
-        # 当前路径显示
-        self.path_display = QLineEdit()
-        self.path_display.setPlaceholderText('当前打开的文件夹路径...')
-        self.path_display.setReadOnly(True)
-        layout.addWidget(self.path_display, stretch=1)
-
-        # 视频数量
-        self.count_label = QLabel('0个视频', parent=self)
-        layout.addWidget(self.count_label)
+        # 搜索框（按文件名或标签搜索当前文件夹及子文件夹，占据剩余空间）
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText('🔍 搜索文件名或标签...')
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self.on_search_text_changed)
+        self.search_input.returnPressed.connect(self._run_search_from_box)
+        layout.addWidget(self.search_input, stretch=1)
 
         return toolbar
 
@@ -141,6 +146,12 @@ class MainWindow(QMainWindow):
 
     def load_videos(self, folder):
         """加载当前文件夹中的子文件夹和视频（不递归）"""
+        # 清空搜索框（blockSignals 避免触发搜索）
+        self.search_timer.stop()
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+
         # 停止之前的加载线程
         if self.loader_thread and self.loader_thread.isRunning():
             self.loader_thread.stop()
@@ -158,7 +169,6 @@ class MainWindow(QMainWindow):
         video_count = len(self.video_paths)
 
         # 更新统计信息
-        self.count_label.setText(f'{video_count}个视频')
         self.stats_label.setText(f'{folder}  -  {folder_count}个文件夹 / {video_count}个视频')
 
         # 加载视频标签
@@ -246,9 +256,92 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f'加载缩略图{current}/{total}')
 
     def on_tag_clicked(self, tag):
-        """点击标签 - 搜索该标签"""
-        self.status_label.setText(f'搜索标签: {tag}')
-        # TODO: 实现搜索功能
+        """点击视频卡片上的标签 - 仅搜索该标签"""
+        if not self.current_folder:
+            self.status_label.setText(f'搜索标签: {tag}')
+            return
+
+        # 在搜索框中显示当前标签（blockSignals 避免触发搜索框自身的搜索逻辑）
+        self.search_input.blockSignals(True)
+        self.search_input.setText(tag)
+        self.search_input.blockSignals(False)
+
+        self._apply_search(tag, tag_only=True)
+
+    def on_search_text_changed(self, text):
+        """搜索框文本变化 - 防抖后执行搜索"""
+        self.search_timer.start()
+
+    def _run_search_from_box(self):
+        """执行搜索框搜索（按文件名或标签，防抖回调 / 回车触发）"""
+        self.search_timer.stop()
+        query = self.search_input.text().strip()
+        if not query:
+            self._exit_search()
+            return
+        self._apply_search(query, tag_only=False)
+
+    def _exit_search(self):
+        """清空搜索，回到当前文件夹视图"""
+        if self.current_folder:
+            self.load_videos(self.current_folder)
+
+    def _apply_search(self, query, tag_only=False):
+        """在「当前文件夹 + 子文件夹」范围内搜索视频"""
+        if not self.current_folder:
+            return
+
+        # 停止之前的加载线程
+        if self.loader_thread and self.loader_thread.isRunning():
+            self.loader_thread.stop()
+            self.loader_thread.wait()
+            self.loader_thread = None
+
+        # 当前文件夹范围内（含子文件夹）的所有视频
+        all_paths = set(self.library.list_videos_recursive(self.current_folder))
+
+        if tag_only:
+            # 仅按标签精确匹配
+            matched = set(self.db.get_videos_by_tag(query)) & all_paths
+        else:
+            q = query.lower()
+            tags_map = self.db.get_videos_with_tags()  # {视频路径: [标签]}
+            matched = set()
+            for path in all_paths:
+                # 文件名匹配（不区分大小写）
+                if q in os.path.basename(path).lower():
+                    matched.add(path)
+                    continue
+                # 标签匹配（标签名包含查询词）
+                if any(q in tag.lower() for tag in tags_map.get(path, [])):
+                    matched.add(path)
+
+        matched_paths = sorted(matched, key=lambda x: os.path.basename(x).lower())
+        self._show_search_results(matched_paths, query)
+
+    def _show_search_results(self, matched_paths, query):
+        """显示搜索结果"""
+        self.video_tags_cache.clear()
+        self.video_paths = matched_paths
+
+        self.load_video_tags(matched_paths)
+        play_count_cache = self.load_video_play_counts(matched_paths)
+
+        self.stats_label.setText(f'搜索结果: "{query}"  -  共{len(matched_paths)}个视频')
+        self.video_grid.set_entries([], matched_paths, self.video_tags_cache, play_count_cache)
+
+        if not matched_paths:
+            self.status_label.setText('未找到匹配的视频')
+            self.progress_bar.setVisible(False)
+            return
+
+        self.status_label.setText(f'正在加载 {len(matched_paths)} 个视频的缩略图...')
+        self.loader_thread = VideoLoaderThread()
+        self.loader_thread.set_videos(matched_paths)
+        self.loader_thread.video_loaded.connect(self.on_video_metadata_loaded)
+        self.loader_thread.all_loaded.connect(self.on_all_videos_loaded)
+        self.loader_thread.progress.connect(self.on_loading_progress)
+        self.loader_thread.start()
 
     def show_video_context_menu(self, file_path, pos):
         """显示视频右键菜单"""
@@ -352,7 +445,6 @@ class MainWindow(QMainWindow):
         if folder:
             self.folder_stack.clear()
             self.current_folder = folder
-            self.path_display.setText(folder)
             self.update_up_button_state()
             self.load_videos(folder)
 
@@ -360,7 +452,6 @@ class MainWindow(QMainWindow):
         """双击文件夹卡片，进入子文件夹"""
         self.folder_stack.append(self.current_folder)
         self.current_folder = folder_path
-        self.path_display.setText(folder_path)
         self.update_up_button_state()
         self.load_videos(folder_path)
 
@@ -370,7 +461,6 @@ class MainWindow(QMainWindow):
             return
         parent = self.folder_stack.pop()
         self.current_folder = parent
-        self.path_display.setText(parent)
         self.update_up_button_state()
         self.load_videos(parent)
 
