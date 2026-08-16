@@ -30,6 +30,7 @@ class MainWindow(QMainWindow):
         self.folder_stack = []  # 文件夹导航栈（用于返回上级）
         self.video_paths = []
         self.loader_thread = None
+        self._load_session = 0  # 加载会话编号，用于忽略旧线程的延迟信号
         self.current_selected_path = ''
         self.video_tags_cache = {}  # 缓存视频标签
 
@@ -189,12 +190,33 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f'正在加载 {video_count} 个视频的缩略图...')
 
         # 启动后台加载线程
-        self.loader_thread = VideoLoaderThread()
-        self.loader_thread.set_videos(self.video_paths)
-        self.loader_thread.video_loaded.connect(self.on_video_metadata_loaded)
-        self.loader_thread.all_loaded.connect(self.on_all_videos_loaded)
-        self.loader_thread.progress.connect(self.on_loading_progress)
-        self.loader_thread.start()
+        self._start_loader(self.video_paths)
+
+    def _start_loader(self, paths):
+        """启动后台加载线程。
+
+        每次加载分配新的会话编号，并用 lambda 把编号传给回调；
+        旧线程延迟到达的信号会因会话编号不匹配而被忽略，
+        避免它在切换文件夹后误清空正在运行的新线程导致崩溃。
+        """
+        # 停止并等待之前的加载线程
+        if self.loader_thread and self.loader_thread.isRunning():
+            self.loader_thread.stop()
+            self.loader_thread.wait()
+            self.loader_thread = None
+
+        self._load_session += 1
+        session = self._load_session
+
+        thread = VideoLoaderThread()
+        thread.set_videos(paths)
+        thread.video_loaded.connect(
+            lambda path, meta, s=session: self.on_video_metadata_loaded(path, meta, s))
+        thread.all_loaded.connect(lambda s=session: self.on_all_videos_loaded(s))
+        thread.progress.connect(
+            lambda cur, tot, s=session: self.on_loading_progress(cur, tot, s))
+        self.loader_thread = thread
+        thread.start()
 
     def save_video_to_database(self, file_path, metadata):
         """保存视频信息到数据库"""
@@ -232,8 +254,11 @@ class MainWindow(QMainWindow):
                 counts[path] = video['play_count']
         return counts
 
-    def on_video_metadata_loaded(self, file_path, metadata):
+    def on_video_metadata_loaded(self, file_path, metadata, session=None):
         """单个视频元数据加载完成"""
+        # 忽略旧加载会话延迟到达的信号
+        if session is not None and session != self._load_session:
+            return
         # 更新对应卡片的时长显示
         self.video_grid.update_card_metadata(file_path, metadata)
         self.save_video_to_database(file_path, metadata)
@@ -242,14 +267,20 @@ class MainWindow(QMainWindow):
         if video:
             self.video_grid.update_card_play_count(file_path, video.get('play_count'))
 
-    def on_all_videos_loaded(self):
+    def on_all_videos_loaded(self, session=None):
         """所有视频加载完成"""
+        # 忽略旧加载会话延迟到达的信号
+        if session is not None and session != self._load_session:
+            return
         self.status_label.setText(f'加载完成，共{len(self.video_paths)}个视频')
         self.progress_bar.setVisible(False)
         self.loader_thread = None
 
-    def on_loading_progress(self, current, total):
+    def on_loading_progress(self, current, total, session=None):
         """更新进度"""
+        # 忽略旧加载会话延迟到达的信号
+        if session is not None and session != self._load_session:
+            return
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(current)
@@ -336,12 +367,7 @@ class MainWindow(QMainWindow):
             return
 
         self.status_label.setText(f'正在加载 {len(matched_paths)} 个视频的缩略图...')
-        self.loader_thread = VideoLoaderThread()
-        self.loader_thread.set_videos(matched_paths)
-        self.loader_thread.video_loaded.connect(self.on_video_metadata_loaded)
-        self.loader_thread.all_loaded.connect(self.on_all_videos_loaded)
-        self.loader_thread.progress.connect(self.on_loading_progress)
-        self.loader_thread.start()
+        self._start_loader(matched_paths)
 
     def show_video_context_menu(self, file_path, pos):
         """显示视频右键菜单"""
