@@ -2,7 +2,6 @@ import os
 import platform
 import subprocess
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QLineEdit,
     QFileDialog, QMessageBox, QStatusBar, QProgressBar, QMenu
@@ -33,12 +32,6 @@ class MainWindow(QMainWindow):
         self._load_session = 0  # 加载会话编号，用于忽略旧线程的延迟信号
         self.current_selected_path = ''
         self.video_tags_cache = {}  # 缓存视频标签
-
-        # 搜索防抖定时器
-        self.search_timer = QTimer(self)
-        self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(250)
-        self.search_timer.timeout.connect(self._run_search_from_box)
 
         self.setWindowTitle('VidExplorer - 视频库')
         self.setMinimumSize(1200, 700)
@@ -114,11 +107,15 @@ class MainWindow(QMainWindow):
 
         # 搜索框（按文件名或标签搜索当前文件夹及子文件夹，占据剩余空间）
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText('🔍 搜索文件名或标签...')
+        self.search_input.setPlaceholderText('搜索文件名或标签...')
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.textChanged.connect(self.on_search_text_changed)
         self.search_input.returnPressed.connect(self._run_search_from_box)
         layout.addWidget(self.search_input, stretch=1)
+
+        # 搜索按钮（点击或按回车触发搜索）
+        self.search_btn = QPushButton('🔍搜索')
+        self.search_btn.clicked.connect(self._run_search_from_box)
+        layout.addWidget(self.search_btn)
 
         return toolbar
 
@@ -147,8 +144,7 @@ class MainWindow(QMainWindow):
 
     def load_videos(self, folder):
         """加载当前文件夹中的子文件夹和视频（不递归）"""
-        # 清空搜索框（blockSignals 避免触发搜索）
-        self.search_timer.stop()
+        # 清空搜索框（blockSignals 避免触发其他信号）
         self.search_input.blockSignals(True)
         self.search_input.clear()
         self.search_input.blockSignals(False)
@@ -299,13 +295,8 @@ class MainWindow(QMainWindow):
 
         self._apply_search(tag, tag_only=True)
 
-    def on_search_text_changed(self, text):
-        """搜索框文本变化 - 防抖后执行搜索"""
-        self.search_timer.start()
-
     def _run_search_from_box(self):
-        """执行搜索框搜索（按文件名或标签，防抖回调 / 回车触发）"""
-        self.search_timer.stop()
+        """执行搜索框搜索（按文件名或标签，搜索按钮 / 回车触发）"""
         query = self.search_input.text().strip()
         if not query:
             self._exit_search()
