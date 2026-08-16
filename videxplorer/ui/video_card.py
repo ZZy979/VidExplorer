@@ -1,5 +1,8 @@
+import datetime
+import os
+
 from PySide6.QtCore import Signal, Qt, QTimer
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget
 
 from videxplorer.ui.tag_manager_widget import TagDisplayWidget
 from videxplorer.utils.file import get_file_name, get_file_size_readable
@@ -30,7 +33,8 @@ class VideoCard(QFrame):
                 background: #f5f5f5;
             }
         """)
-        self.setFixedSize(220, 280)
+        self.setFixedWidth(220)
+        self.setMinimumHeight(200)
         self.setCursor(Qt.PointingHandCursor)
 
         # 主布局
@@ -63,9 +67,8 @@ class VideoCard(QFrame):
         # 让 loading_label 覆盖在 thumb_label 上面（通过堆叠顺序）
         self.loading_label.raise_()
 
-        # 时长标签（覆盖在缩略图右下角）
-        self.duration_label = QLabel()
-        self.duration_label.setAlignment(Qt.AlignBottom | Qt.AlignRight)
+        # 时长标签（覆盖在缩略图右下角，与缩略图重叠）
+        self.duration_label = QLabel(self.thumb_container)
         self.duration_label.setStyleSheet("""
             QLabel {
                 color: white;
@@ -76,8 +79,7 @@ class VideoCard(QFrame):
                 font-weight: bold;
             }
         """)
-        self.duration_label.setFixedHeight(24)
-        thumb_layout.addWidget(self.duration_label)
+        self.duration_label.hide()
 
         layout.addWidget(self.thumb_container)
 
@@ -98,21 +100,31 @@ class VideoCard(QFrame):
         name_label.setFont(font)
         info_layout.addWidget(name_label)
 
-        # 文件大小
-        size_str = get_file_size_readable(file_path)
-        size_label = QLabel(size_str)
-        size_label.setStyleSheet("font-size: 11px; color: #666;")
-        info_layout.addWidget(size_label)
+        # 元信息行：日期、大小、播放次数（同一行显示）
+        meta_row = QHBoxLayout()
+        meta_row.setSpacing(8)
 
-        # 播放次数
+        try:
+            mtime = os.path.getmtime(file_path)
+            date_str = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+        except OSError:
+            date_str = ''
+
+        date_label = QLabel(date_str)
+        size_label = QLabel(get_file_size_readable(file_path))
         self.play_label = QLabel()
-        self.play_label.setStyleSheet("font-size: 11px; color: #666;")
-        info_layout.addWidget(self.play_label)
+        for lbl in (date_label, size_label, self.play_label):
+            lbl.setStyleSheet("font-size: 11px; color: #666;")
 
-        # 标签显示区域
+        meta_row.addWidget(date_label)
+        meta_row.addWidget(size_label)
+        meta_row.addStretch()
+        meta_row.addWidget(self.play_label)
+        info_layout.addLayout(meta_row)
+
+        # 标签显示区域（过多时自动换行）
         self.tag_display = TagDisplayWidget()
         self.tag_display.tag_clicked.connect(self.tag_clicked.emit)
-        self.tag_display.setMaximumHeight(30)
         info_layout.addWidget(self.tag_display)
 
         layout.addWidget(info_widget)
@@ -130,7 +142,7 @@ class VideoCard(QFrame):
         """设置播放次数"""
         self.play_count = count
         if count is not None:
-            self.play_label.setText(f'▶ 播放 {count} 次')
+            self.play_label.setText(f'▶{count}')
         else:
             self.play_label.setText('')
 
@@ -138,10 +150,28 @@ class VideoCard(QFrame):
         """更新元数据（从后台线程接收）"""
         self.metadata = metadata
         if metadata.duration:
-            self.duration_label.setText(metadata.duration_str)
+            self._set_duration(metadata.duration_str)
 
         if not self.thumb_label.pixmap():
             QTimer.singleShot(10, self.load_thumbnail)
+
+    def _set_duration(self, duration_str):
+        """设置时长并定位到缩略图右下角（与缩略图重叠）"""
+        self.duration_label.setText(duration_str)
+        self.duration_label.adjustSize()
+        x = self.thumb_container.width() - self.duration_label.width() - 8
+        y = self.thumb_container.height() - self.duration_label.height() - 8
+        self.duration_label.move(max(0, x), max(0, y))
+        self.duration_label.show()
+
+    def resizeEvent(self, event):
+        """卡片尺寸变化时，保持时长标签在缩略图右下角"""
+        super().resizeEvent(event)
+        if self.duration_label and self.duration_label.text():
+            self.duration_label.adjustSize()
+            x = self.thumb_container.width() - self.duration_label.width() - 8
+            y = self.thumb_container.height() - self.duration_label.height() - 8
+            self.duration_label.move(max(0, x), max(0, y))
 
     def load_thumbnail(self):
         """加载缩略图"""
@@ -173,7 +203,7 @@ class VideoCard(QFrame):
 
         # 如果有元数据，更新时长
         if self.metadata and self.metadata.duration:
-            self.duration_label.setText(self.metadata.duration_str)
+            self._set_duration(self.metadata.duration_str)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)

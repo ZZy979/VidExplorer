@@ -1,6 +1,8 @@
 """标签管理组件（显示视频的标签）"""
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QScrollArea, QFrame
+from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
+
+from videxplorer.ui.flow_layout import FlowLayout
 
 
 class TagDisplayWidget(QWidget):
@@ -15,26 +17,14 @@ class TagDisplayWidget(QWidget):
 
     def setup_ui(self):
         """设置UI"""
-        # 使用滚动区域容纳标签
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("background: transparent; border: none;")
-
         self.container = QWidget()
         self.container.setStyleSheet("background: transparent;")
-        self.layout = QHBoxLayout(self.container)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(5)
-        self.layout.addStretch()
+        # 使用自动换行布局，标签过多时换行显示
+        self.layout = FlowLayout(self.container, margin=0, spacing=5)
 
-        scroll.setWidget(self.container)
-
-        main_layout = QHBoxLayout(self)
+        main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
+        main_layout.addWidget(self.container)
 
     def set_tags(self, tags):
         """设置标签列表"""
@@ -44,10 +34,10 @@ class TagDisplayWidget(QWidget):
     def update_display(self):
         """更新显示"""
         # 清空现有标签按钮
-        for i in reversed(range(self.layout.count())):
-            widget = self.layout.itemAt(i).widget()
-            if widget:
-                widget.deleteLater()
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
 
         # 添加标签按钮
         for tag in sorted(self.tags):
@@ -66,7 +56,7 @@ class TagDisplayWidget(QWidget):
                 }}
             """)
             btn.clicked.connect(lambda checked, t=tag: self.tag_clicked.emit(t))
-            self.layout.insertWidget(self.layout.count() - 1, btn)
+            self.layout.addWidget(btn)
 
     def add_tag(self, tag):
         """添加标签"""
