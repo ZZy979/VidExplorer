@@ -2,6 +2,7 @@ import os
 import platform
 import subprocess
 
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QLineEdit,
     QFileDialog, QMessageBox, QStatusBar, QProgressBar, QMenu
@@ -30,6 +31,7 @@ class MainWindow(QMainWindow):
         self.video_paths = []
         self.loader_thread = None
         self._load_session = 0  # 加载会话编号，用于忽略旧线程的延迟信号
+        self.sort_mode = 'name'  # 排序方式：name / mtime / play_count
         self.current_selected_path = ''
         self.video_tags_cache = {}  # 缓存视频标签
 
@@ -134,6 +136,27 @@ class MainWindow(QMainWindow):
         exit_action = file_menu.addAction('退出(&X)')
         exit_action.triggered.connect(self.close)
 
+        # 视图菜单（排序方式）
+        view_menu = menubar.addMenu('视图(&V)')
+        self.sort_group = QActionGroup(self)
+        self.sort_group.setExclusionPolicy(QActionGroup.ExclusionPolicy.Exclusive)
+
+        self.sort_name_action = view_menu.addAction('按文件名')
+        self.sort_name_action.setCheckable(True)
+        self.sort_name_action.setChecked(True)
+        self.sort_name_action.triggered.connect(lambda: self.set_sort_mode('name'))
+
+        self.sort_mtime_action = view_menu.addAction('按修改时间')
+        self.sort_mtime_action.setCheckable(True)
+        self.sort_mtime_action.triggered.connect(lambda: self.set_sort_mode('mtime'))
+
+        self.sort_play_action = view_menu.addAction('按播放次数')
+        self.sort_play_action.setCheckable(True)
+        self.sort_play_action.triggered.connect(lambda: self.set_sort_mode('play_count'))
+
+        for action in (self.sort_name_action, self.sort_mtime_action, self.sort_play_action):
+            self.sort_group.addAction(action)
+
         # 工具菜单
         tools_menu = menubar.addMenu('工具(&T)')
         clear_cache_action = tools_menu.addAction('清空缩略图缓存')
@@ -173,6 +196,10 @@ class MainWindow(QMainWindow):
 
         # 加载播放次数
         play_count_cache = self.load_video_play_counts(self.video_paths)
+
+        # 应用排序（子文件夹始终排在视频之前）
+        folder_items = self._sort_folders(folder_items)
+        self.video_paths = self._sort_videos(self.video_paths, play_count_cache)
 
         # 显示文件夹和视频卡片
         self.video_grid.set_entries(
@@ -249,6 +276,41 @@ class MainWindow(QMainWindow):
             if video and video.get('play_count') is not None:
                 counts[path] = video['play_count']
         return counts
+
+    def set_sort_mode(self, mode):
+        """设置排序方式并刷新当前视图"""
+        self.sort_mode = mode
+        # 同步勾选状态
+        self.sort_name_action.setChecked(mode == 'name')
+        self.sort_mtime_action.setChecked(mode == 'mtime')
+        self.sort_play_action.setChecked(mode == 'play_count')
+        if self.current_folder:
+            self.load_videos(self.current_folder)
+
+    @staticmethod
+    def _mtime(path):
+        """获取路径修改时间（不存在时返回 0）"""
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    def _sort_folders(self, folder_items):
+        """对子文件夹排序：按文件名升序（默认）或修改时间降序。
+
+        播放次数排序对子文件夹不生效，仍按文件名升序。
+        """
+        if self.sort_mode == 'mtime':
+            return sorted(folder_items, key=lambda item: self._mtime(item[0]), reverse=True)
+        return sorted(folder_items, key=lambda item: os.path.basename(item[0]).lower())
+
+    def _sort_videos(self, video_paths, play_count_cache):
+        """对视频排序：文件名升序（默认）/ 修改时间降序 / 播放次数降序"""
+        if self.sort_mode == 'mtime':
+            return sorted(video_paths, key=self._mtime, reverse=True)
+        if self.sort_mode == 'play_count':
+            return sorted(video_paths, key=lambda p: play_count_cache.get(p, 0), reverse=True)
+        return sorted(video_paths, key=lambda p: os.path.basename(p).lower())
 
     def on_video_metadata_loaded(self, file_path, metadata, session=None):
         """单个视频元数据加载完成"""
@@ -348,6 +410,10 @@ class MainWindow(QMainWindow):
 
         self.load_video_tags(matched_paths)
         play_count_cache = self.load_video_play_counts(matched_paths)
+
+        # 按当前排序方式排列搜索结果
+        matched_paths = self._sort_videos(matched_paths, play_count_cache)
+        self.video_paths = matched_paths
 
         self.stats_label.setText(f'搜索结果: "{query}"  -  共{len(matched_paths)}个视频')
         self.video_grid.set_entries([], matched_paths, self.video_tags_cache, play_count_cache)
