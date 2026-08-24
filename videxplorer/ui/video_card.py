@@ -94,7 +94,7 @@ class VideoCard(QFrame):
         name = get_file_name(file_path)
         name_label = QLabel(name)
         name_label.setWordWrap(True)
-        name_label.setMaximumHeight(40)
+        name_label.setMaximumHeight(80)
         font = name_label.font()
         font.setPointSize(10)
         name_label.setFont(font)

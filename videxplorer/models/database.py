@@ -476,3 +476,49 @@ class VideoDatabase:
             if tag:
                 result[path].append(tag)
         return result
+
+    def rename_video(self, old_path, new_path):
+        """重命名视频：更新数据库中的路径与标题"""
+        db = self.get_connection()
+        query = QSqlQuery(db)
+        query.prepare('UPDATE videos SET file_path = ?, title = ? WHERE file_path = ?')
+        query.addBindValue(new_path)
+        query.addBindValue(os.path.basename(new_path))
+        query.addBindValue(old_path)
+        if not query.exec():
+            logging.error(f'rename_video 失败: {query.lastError().text()}')
+            return False
+        return True
+
+    def delete_video(self, file_path):
+        """删除视频记录及其标签关联"""
+        db = self.get_connection()
+        video = self.get_video_by_path(file_path)
+        if not video:
+            return True  # 数据库中无记录，无需删除
+
+        if not db.transaction():
+            logging.error(f'开启事务失败: {db.lastError().text()}')
+            return False
+
+        try:
+            # 删除标签关联（video_tags 外键为 ON DELETE CASCADE，显式删除更稳妥）
+            query = QSqlQuery(db)
+            query.prepare('DELETE FROM video_tags WHERE video_id = ?')
+            query.addBindValue(video['id'])
+            if not query.exec():
+                raise RuntimeError(f'删除视频标签关联失败: {query.lastError().text()}')
+
+            # 删除视频记录
+            query = QSqlQuery(db)
+            query.prepare('DELETE FROM videos WHERE id = ?')
+            query.addBindValue(video['id'])
+            if not query.exec():
+                raise RuntimeError(f'删除视频记录失败: {query.lastError().text()}')
+
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            logging.error(f'delete_video 失败: {e}')
+            return False

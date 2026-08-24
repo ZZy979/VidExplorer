@@ -42,6 +42,28 @@ class ThumbnailCache:
 
         return None
 
+    def remove_cache(self, file_path, mtime=None):
+        """删除指定视频的缩略图缓存。
+
+        mtime 用于定位缓存文件；当文件已被删除/重命名时，
+        可传入删除前的修改时间。
+        """
+        if mtime is None:
+            try:
+                mtime = os.stat(file_path).st_mtime
+            except OSError:
+                return
+        # 遍历可能使用过的缩略图尺寸
+        for size in (220, 320):
+            key = f'{file_path}_{mtime}_{size}'
+            cache_path = os.path.join(
+                self.cache_dir, f'{hashlib.md5(key.encode()).hexdigest()}.jpg')
+            try:
+                if os.path.exists(cache_path):
+                    os.remove(cache_path)
+            except OSError:
+                pass
+
     def clear_cache(self):
         """清空所有缓存"""
         for file in os.listdir(self.cache_dir):

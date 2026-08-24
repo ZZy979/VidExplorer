@@ -12,6 +12,7 @@ from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.batch_tag_dialog import BatchTagDialog
+from videxplorer.ui.rename_dialog import RenameDialog
 from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.tag_manager_dialog import TagManagerDialog
 from videxplorer.ui.video_grid import VideoGrid
@@ -431,12 +432,20 @@ class MainWindow(QMainWindow):
         self.current_selected_path = file_path
 
         menu = QMenu(self)
+
+        play_action = menu.addAction('播放')
+        play_action.triggered.connect(lambda: self.on_video_clicked(file_path))
+
+        menu.addSeparator()
+
         edit_tags_action = menu.addAction('编辑标签')
         edit_tags_action.triggered.connect(lambda: self.edit_video_tags(file_path))
 
-        menu.addSeparator()
-        play_action = menu.addAction('播放')
-        play_action.triggered.connect(lambda: self.on_video_clicked(file_path))
+        rename_action = menu.addAction('重命名')
+        rename_action.triggered.connect(lambda: self.rename_video(file_path))
+
+        delete_action = menu.addAction('删除')
+        delete_action.triggered.connect(lambda: self.delete_video(file_path))
 
         menu.exec(pos)
 
@@ -580,6 +589,103 @@ class MainWindow(QMainWindow):
                 subprocess.run(['xdg-open', video_path])
         except Exception as e:
             QMessageBox.warning(self, '播放失败', str(e))
+
+    def rename_video(self, file_path):
+        """重命名视频：更新磁盘上的文件名和数据库中的视频信息"""
+        dialog = RenameDialog(file_path, self)
+        if not dialog.exec():
+            return  # 点击取消，不做任何修改
+
+        new_name = dialog.get_new_name()
+        old_name = os.path.basename(file_path)
+        if new_name == old_name:
+            return
+
+        # 新文件名不能包含路径分隔符
+        if os.sep in new_name or (os.altsep and os.altsep in new_name):
+            QMessageBox.warning(self, '重命名失败', '文件名不能包含路径分隔符')
+            return
+
+        # 扩展名必须仍为支持的视频格式
+        new_ext = os.path.splitext(new_name)[1].lower()
+        if new_ext not in VideoLibrary.VIDEO_EXTENSIONS:
+            QMessageBox.warning(
+                self, '重命名失败',
+                f'扩展名必须为支持的视频格式: {", ".join(sorted(VideoLibrary.VIDEO_EXTENSIONS))}')
+            return
+
+        new_path = os.path.join(os.path.dirname(file_path), new_name)
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, '重命名失败', f'目标文件已存在: {new_name}')
+            return
+
+        # 记录原文件修改时间，用于清理旧路径的缩略图缓存
+        try:
+            old_mtime = os.stat(file_path).st_mtime
+        except OSError:
+            old_mtime = None
+
+        try:
+            os.rename(file_path, new_path)
+        except OSError as e:
+            QMessageBox.warning(self, '重命名失败', f'无法重命名文件:\n{e}')
+            return
+
+        # 清理旧路径的缩略图缓存
+        if old_mtime is not None:
+            thumbnail_cache.remove_cache(file_path, old_mtime)
+
+        # 更新数据库中的路径与标题
+        self.db.rename_video(file_path, new_path)
+
+        # 更新内存缓存
+        if file_path in self.video_tags_cache:
+            self.video_tags_cache[new_path] = self.video_tags_cache.pop(file_path)
+
+        self.status_label.setText(f'已重命名: {old_name} -> {new_name}')
+        if self.current_folder:
+            self.load_videos(self.current_folder)
+
+    def delete_video(self, file_path):
+        """删除视频：删除磁盘文件、数据库记录与标签信息"""
+        box = QMessageBox(self)
+        box.setWindowTitle('确认删除')
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText('确定要删除以下视频吗？\n此操作将永久删除磁盘上的文件、数据库记录及标签信息，且无法恢复。')
+        box.setInformativeText(file_path)
+        confirm_btn = box.addButton('确认', QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = box.addButton('取消', QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        if box.clickedButton() is not confirm_btn:
+            return  # 点击取消，不删除
+
+        # 记录原文件修改时间，用于清理缩略图缓存
+        try:
+            old_mtime = os.stat(file_path).st_mtime
+        except OSError:
+            old_mtime = None
+
+        # 删除磁盘文件
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            QMessageBox.warning(self, '删除失败', f'无法删除文件:\n{e}')
+            return
+
+        # 清理缩略图缓存
+        if old_mtime is not None:
+            thumbnail_cache.remove_cache(file_path, old_mtime)
+
+        # 删除数据库记录与标签关联
+        self.db.delete_video(file_path)
+
+        # 更新内存缓存
+        self.video_tags_cache.pop(file_path, None)
+
+        self.status_label.setText(f'已删除: {os.path.basename(file_path)}')
+        if self.current_folder:
+            self.load_videos(self.current_folder)
 
     def closeEvent(self, event):
         """窗口关闭时停止加载线程"""
