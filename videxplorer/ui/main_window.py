@@ -12,6 +12,7 @@ from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.batch_tag_dialog import BatchTagDialog
+from videxplorer.ui.clean_missing_dialog import CleanMissingDialog
 from videxplorer.ui.rename_dialog import RenameDialog
 from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.tag_manager_dialog import TagManagerDialog
@@ -162,6 +163,8 @@ class MainWindow(QMainWindow):
         tools_menu = menubar.addMenu('工具(&T)')
         clear_cache_action = tools_menu.addAction('清空缩略图缓存')
         clear_cache_action.triggered.connect(self.clear_thumbnail_cache)
+        clean_missing_action = tools_menu.addAction('清理已失效文件')
+        clean_missing_action.triggered.connect(self.clean_missing_files)
         tools_menu.addSeparator()
         tag_manager_action = tools_menu.addAction('标签管理')
         tag_manager_action.triggered.connect(self.open_tag_manager)
@@ -529,6 +532,37 @@ class MainWindow(QMainWindow):
             # 刷新当前视图
             if self.current_folder:
                 self.load_videos(self.current_folder)
+
+    def clean_missing_files(self):
+        """清理已失效文件：从数据库中删除磁盘上已不存在的视频信息及标签信息"""
+        missing_paths = []
+        for video in self.db.get_all_videos():
+            file_path = video.get('file_path')
+            if not file_path:
+                continue
+            # 磁盘上已不再是该文件，视为失效
+            if not os.path.isfile(file_path):
+                missing_paths.append(file_path)
+
+        if not missing_paths:
+            QMessageBox.information(self, '提示', '没有已失效的文件')
+            return
+
+        missing_paths.sort(key=lambda p: p.lower())
+
+        # 弹出确认窗口，列出所有待删除文件的完整路径
+        dialog = CleanMissingDialog(missing_paths, self)
+        if not dialog.exec():
+            return  # 点击取消，不删除
+
+        paths = dialog.get_paths()
+        if self.db.delete_videos(paths):
+            self.status_label.setText(f'已从数据库清理 {len(paths)} 个失效文件记录')
+            # 刷新当前视图
+            if self.current_folder:
+                self.load_videos(self.current_folder)
+        else:
+            QMessageBox.warning(self, '失败', '清理失效文件失败')
 
     def open_folder(self):
         """打开文件夹选择对话框"""

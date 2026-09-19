@@ -492,33 +492,38 @@ class VideoDatabase:
 
     def delete_video(self, file_path):
         """删除视频记录及其标签关联"""
-        db = self.get_connection()
-        video = self.get_video_by_path(file_path)
-        if not video:
-            return True  # 数据库中无记录，无需删除
+        return self.delete_videos([file_path])
 
+    def delete_videos(self, file_paths):
+        """批量删除视频记录及其标签关联（用于清理磁盘上已不存在的文件等）"""
+        if not file_paths:
+            return True
+
+        db = self.get_connection()
         if not db.transaction():
             logging.error(f'开启事务失败: {db.lastError().text()}')
             return False
 
         try:
-            # 删除标签关联（video_tags 外键为 ON DELETE CASCADE，显式删除更稳妥）
-            query = QSqlQuery(db)
-            query.prepare('DELETE FROM video_tags WHERE video_id = ?')
-            query.addBindValue(video['id'])
-            if not query.exec():
-                raise RuntimeError(f'删除视频标签关联失败: {query.lastError().text()}')
+            for file_path in file_paths:
+                # 先删除标签关联（video_tags 外键为 ON DELETE CASCADE，显式删除更稳妥）
+                query = QSqlQuery(db)
+                query.prepare('DELETE FROM video_tags WHERE video_id IN '
+                              '(SELECT id FROM videos WHERE file_path = ?)')
+                query.addBindValue(file_path)
+                if not query.exec():
+                    raise RuntimeError(f'删除视频标签关联失败: {query.lastError().text()}')
 
-            # 删除视频记录
-            query = QSqlQuery(db)
-            query.prepare('DELETE FROM videos WHERE id = ?')
-            query.addBindValue(video['id'])
-            if not query.exec():
-                raise RuntimeError(f'删除视频记录失败: {query.lastError().text()}')
+                # 再删除视频记录
+                query = QSqlQuery(db)
+                query.prepare('DELETE FROM videos WHERE file_path = ?')
+                query.addBindValue(file_path)
+                if not query.exec():
+                    raise RuntimeError(f'删除视频记录失败: {query.lastError().text()}')
 
             db.commit()
             return True
         except Exception as e:
             db.rollback()
-            logging.error(f'delete_video 失败: {e}')
+            logging.error(f'delete_videos 失败: {e}')
             return False
