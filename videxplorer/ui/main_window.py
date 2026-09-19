@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 import subprocess
 
 from PySide6.QtGui import QActionGroup
@@ -18,6 +19,7 @@ from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.tag_manager_dialog import TagManagerDialog
 from videxplorer.ui.video_grid import VideoGrid
 from videxplorer.utils.file import get_file_size, get_video_dimensions
+from videxplorer.utils.path import normalize_path
 from videxplorer.utils.thumbnail_cache import thumbnail_cache
 
 
@@ -444,6 +446,9 @@ class MainWindow(QMainWindow):
         edit_tags_action = menu.addAction('编辑标签')
         edit_tags_action.triggered.connect(lambda: self.edit_video_tags(file_path))
 
+        move_action = menu.addAction('移动')
+        move_action.triggered.connect(lambda: self.move_video(file_path))
+
         rename_action = menu.addAction('重命名')
         rename_action.triggered.connect(lambda: self.rename_video(file_path))
 
@@ -570,6 +575,8 @@ class MainWindow(QMainWindow):
             self, '选择视频文件夹', self.current_folder, QFileDialog.Option.ShowDirsOnly)
         if folder:
             self.folder_stack.clear()
+            # 对话框返回的路径可能含正斜杠，统一规范化后再使用
+            folder = normalize_path(folder)
             self.current_folder = folder
             self.update_up_button_state()
             self.load_videos(folder)
@@ -624,6 +631,57 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, '播放失败', str(e))
 
+    def move_video(self, file_path):
+        """移动视频：将视频移动到指定文件夹，并更新数据库中的视频信息"""
+        old_name = os.path.basename(file_path)
+        src_dir = normalize_path(os.path.dirname(file_path))
+
+        target_dir = QFileDialog.getExistingDirectory(
+            self, '选择目标文件夹', src_dir, QFileDialog.Option.ShowDirsOnly)
+        if not target_dir:
+            return  # 点击取消，不移动
+
+        # 统一分隔符后再比较，避免 'H:/a' 与 'H:\a' 被当成不同文件夹
+        target_dir = normalize_path(target_dir)
+
+        # 目标文件夹与视频所在文件夹相同，无需移动
+        if os.path.normcase(target_dir) == os.path.normcase(src_dir):
+            QMessageBox.information(self, '提示', '目标文件夹与视频所在文件夹相同')
+            return
+
+        new_path = os.path.join(target_dir, old_name)
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, '移动失败', f'目标文件夹中已存在同名文件: {old_name}')
+            return
+
+        # 记录原文件修改时间，用于清理旧路径的缩略图缓存
+        try:
+            old_mtime = os.stat(file_path).st_mtime
+        except OSError:
+            old_mtime = None
+
+        # shutil.move 支持跨盘符移动（同盘符时退化为重命名）
+        try:
+            shutil.move(file_path, new_path)
+        except (OSError, shutil.Error) as e:
+            QMessageBox.warning(self, '移动失败', f'无法移动文件:\n{e}')
+            return
+
+        # 清理旧路径的缩略图缓存
+        if old_mtime is not None:
+            thumbnail_cache.remove_cache(file_path, old_mtime)
+
+        # 更新数据库中的路径
+        self.db.update_video_path(file_path, new_path)
+
+        # 更新内存缓存
+        if file_path in self.video_tags_cache:
+            self.video_tags_cache[new_path] = self.video_tags_cache.pop(file_path)
+
+        self.status_label.setText(f'已移动: {old_name} -> {target_dir}')
+        if self.current_folder:
+            self.load_videos(self.current_folder)
+
     def rename_video(self, file_path):
         """重命名视频：更新磁盘上的文件名和数据库中的视频信息"""
         dialog = RenameDialog(file_path, self)
@@ -670,7 +728,7 @@ class MainWindow(QMainWindow):
             thumbnail_cache.remove_cache(file_path, old_mtime)
 
         # 更新数据库中的路径与标题
-        self.db.rename_video(file_path, new_path)
+        self.db.update_video_path(file_path, new_path)
 
         # 更新内存缓存
         if file_path in self.video_tags_cache:

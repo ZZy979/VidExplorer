@@ -6,6 +6,8 @@ import threading
 
 from PySide6.QtSql import QSqlDatabase, QSqlQuery
 
+from videxplorer.utils.path import normalize_path
+
 
 class VideoDatabase:
     """基于 QtSql 的数据库访问类。
@@ -113,7 +115,11 @@ class VideoDatabase:
         return None
 
     def add_or_update_video(self, file_path, metadata):
-        """添加或更新视频信息"""
+        """添加或更新视频信息。
+
+        file_path 会先规范化再入库，保证新增记录的路径不含正斜杠。
+        """
+        file_path = normalize_path(file_path)
         db = self.get_connection()
         query = QSqlQuery(db)
         query.prepare("""
@@ -403,6 +409,7 @@ class VideoDatabase:
 
     def _get_or_create_video_id_in_conn(self, db, file_path):
         """在指定连接/事务中获取或创建视频ID（用于批量操作）"""
+        file_path = normalize_path(file_path)
         query = QSqlQuery(db)
         query.prepare('SELECT id FROM videos WHERE file_path = ?')
         query.addBindValue(file_path)
@@ -477,8 +484,13 @@ class VideoDatabase:
                 result[path].append(tag)
         return result
 
-    def rename_video(self, old_path, new_path):
-        """重命名视频：更新数据库中的路径与标题"""
+    def update_video_path(self, old_path, new_path):
+        """更新视频的磁盘路径与标题（重命名或移动后调用）。
+
+        新路径会先规范化再写入，保证库中路径不含正斜杠；
+        old_path 按原样匹配，以便仍能定位存量数据中分隔符混用的记录。
+        """
+        new_path = normalize_path(new_path)
         db = self.get_connection()
         query = QSqlQuery(db)
         query.prepare('UPDATE videos SET file_path = ?, title = ? WHERE file_path = ?')
@@ -486,7 +498,7 @@ class VideoDatabase:
         query.addBindValue(os.path.basename(new_path))
         query.addBindValue(old_path)
         if not query.exec():
-            logging.error(f'rename_video 失败: {query.lastError().text()}')
+            logging.error(f'update_video_path 失败: {query.lastError().text()}')
             return False
         return True
 
