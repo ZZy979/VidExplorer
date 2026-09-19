@@ -31,11 +31,25 @@ VidExplorer/
         __init__.py
         __main__.py     # 应用入口
         core/           # 核心业务逻辑
+            library.py  # 视频库管理
+            loader.py   # 视频加载器
+            search.py   # 搜索引擎
         models/         # 数据模型
         ui/             # UI 相关
         utils/          # 工具函数
     data/               # 运行时数据
         videos.db       # SQLite数据库
         thumbnails/     # 缩略图缓存
+    tests/              # 单元测试
     requirements.txt    # Python依赖
 ```
+
+## 搜索语法
+
+* `tag:标签名`：具有该标签的视频，可重复使用，标签名含空格时加引号（例如`tag:"xx xx"`）
+* `tag:none`：没有任何标签的视频
+* 其他文字：标题中包含该文字的视频
+
+多个条件之间取交集。
+
+例如：`tag:foo tag:bar baz`表示搜索同时具有标签"foo"和"bar"，且标题包含"baz"的视频。

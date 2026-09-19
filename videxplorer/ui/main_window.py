@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
+from videxplorer.core.search import build_tag_search, match_paths
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.batch_tag_dialog import BatchTagDialog
 from videxplorer.ui.clean_missing_dialog import CleanMissingDialog
@@ -111,9 +112,21 @@ class MainWindow(QMainWindow):
         self.tag_manager_btn.clicked.connect(self.open_tag_manager)
         layout.addWidget(self.tag_manager_btn)
 
-        # 搜索框（按文件名或标签搜索当前文件夹及子文件夹，占据剩余空间）
+        # 搜索框（支持 tag: 语法，搜索当前文件夹及子文件夹，占据剩余空间）
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText('搜索文件名或标签...')
+        self.search_input.setPlaceholderText('搜索标题，或 tag:标签名 ...')
+        self.search_input.setToolTip(
+            '搜索语法（多个条件之间取交集）：\n'
+            '  • tag:标签名 —— 具有该标签的视频，可重复使用\n'
+            '      标签名含空格时加引号，例如 tag:"xx xx"\n'
+            '  • tag:none —— 没有任何标签的视频\n'
+            '  • 其他文字 —— 标题中包含该文字的视频\n'
+            '\n'
+            '例如：tag:foo tag:bar baz\n'
+            '表示「同时具有标签 foo 和 bar，且标题包含 baz 的视频」\n'
+            '\n'
+            '搜索范围为当前文件夹及其所有子文件夹。'
+        )
         self.search_input.setClearButtonEnabled(True)
         self.search_input.returnPressed.connect(self._run_search_from_box)
         layout.addWidget(self.search_input, stretch=1)
@@ -351,33 +364,36 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f'加载缩略图{current}/{total}')
 
     def on_tag_clicked(self, tag):
-        """点击视频卡片上的标签 - 仅搜索该标签"""
+        """点击视频卡片上的标签 - 搜索该标签"""
         if not self.current_folder:
             self.status_label.setText(f'搜索标签: {tag}')
             return
 
-        # 在搜索框中显示当前标签（blockSignals 避免触发搜索框自身的搜索逻辑）
+        # 转成 tag: 语法（标签名含空格时自动加引号）
+        query = build_tag_search(tag)
+
+        # 在搜索框中显示当前条件（blockSignals 避免触发搜索框自身的搜索逻辑）
         self.search_input.blockSignals(True)
-        self.search_input.setText(tag)
+        self.search_input.setText(query)
         self.search_input.blockSignals(False)
 
-        self._apply_search(tag, tag_only=True)
+        self._run_search_from_box()
 
     def _run_search_from_box(self):
-        """执行搜索框搜索（按文件名或标签，搜索按钮 / 回车触发）"""
+        """执行搜索框搜索（搜索按钮 / 回车触发）"""
         query = self.search_input.text().strip()
         if not query:
             self._exit_search()
             return
-        self._apply_search(query, tag_only=False)
+        self._apply_search(query)
 
     def _exit_search(self):
         """清空搜索，回到当前文件夹视图"""
         if self.current_folder:
             self.load_videos(self.current_folder)
 
-    def _apply_search(self, query, tag_only=False):
-        """在「当前文件夹 + 子文件夹」范围内搜索视频"""
+    def _apply_search(self, query):
+        """在「当前文件夹 + 子文件夹」范围内按搜索条件取交集"""
         if not self.current_folder:
             return
 
@@ -388,25 +404,13 @@ class MainWindow(QMainWindow):
             self.loader_thread = None
 
         # 当前文件夹范围内（含子文件夹）的所有视频
-        all_paths = set(self.library.list_videos_recursive(self.current_folder))
+        all_paths = self.library.list_videos_recursive(self.current_folder)
 
-        if tag_only:
-            # 仅按标签精确匹配
-            matched = set(self.db.get_videos_by_tag(query)) & all_paths
-        else:
-            q = query.lower()
-            tags_map = self.db.get_videos_with_tags()  # {视频路径: [标签]}
-            matched = set()
-            for path in all_paths:
-                # 文件名匹配（不区分大小写）
-                if q in os.path.basename(path).lower():
-                    matched.add(path)
-                    continue
-                # 标签匹配（标签名包含查询词）
-                if any(q in tag.lower() for tag in tags_map.get(path, [])):
-                    matched.add(path)
+        # 标签一次取全表，再在内存中与其它条件取交集
+        tags_map = {normalize_path(path): tags
+                    for path, tags in self.db.get_videos_with_tags().items()}
 
-        matched_paths = sorted(matched, key=lambda x: os.path.basename(x).lower())
+        matched_paths = match_paths(all_paths, tags_map, query)
         self._show_search_results(matched_paths, query)
 
     def _show_search_results(self, matched_paths, query):
