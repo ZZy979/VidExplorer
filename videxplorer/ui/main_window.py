@@ -12,16 +12,18 @@ from PySide6.QtWidgets import (
 from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
 from videxplorer.core.search import build_tag_search, match_paths
+from videxplorer.models.collection import CollectionManager
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.batch_tag_dialog import BatchTagDialog
 from videxplorer.ui.clean_missing_dialog import CleanMissingDialog
+from videxplorer.ui.collection_dialogs import CreateCollectionDialog, OpenCollectionDialog
 from videxplorer.ui.rename_dialog import RenameDialog
 from videxplorer.ui.tag_dialog import TagDialog
 from videxplorer.ui.tag_manager_dialog import TagManagerDialog
 from videxplorer.ui.video_grid import VideoGrid
 from videxplorer.utils.file import get_file_size, get_video_dimensions
 from videxplorer.utils.path import normalize_path
-from videxplorer.utils.thumbnail_cache import thumbnail_cache
+from videxplorer.utils.thumbnail_cache import DEFAULT_CACHE_DIR, thumbnail_cache
 
 
 class MainWindow(QMainWindow):
@@ -30,7 +32,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.library = VideoLibrary()
-        self.db = VideoDatabase()
+        self.collection_manager = CollectionManager()
+        self.collection = None  # 当前打开的合集
+        self.db = None  # 合集数据库（打开合集后创建）
         self.current_folder = ''
         self.folder_stack = []  # 文件夹导航栈（用于返回上级）
         self.video_paths = []
@@ -40,7 +44,7 @@ class MainWindow(QMainWindow):
         self.current_selected_path = ''
         self.video_tags_cache = {}  # 缓存视频标签
 
-        self.setWindowTitle('VidExplorer - 视频库')
+        self.setWindowTitle('VidExplorer - 视频合集')
         self.setMinimumSize(1200, 700)
 
         # 创建菜单栏
@@ -58,7 +62,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.toolbar)
 
         # 统计信息栏
-        self.stats_label = QLabel("未打开文件夹")
+        self.stats_label = QLabel('未打开合集')
         main_layout.addWidget(self.stats_label)
 
         # 视频网格
@@ -68,6 +72,7 @@ class MainWindow(QMainWindow):
         self.video_grid.video_context_menu_requested.connect(self.show_video_context_menu)
         self.video_grid.folder_context_menu_requested.connect(self.show_folder_context_menu)
         self.video_grid.folder_opened.connect(self.on_folder_opened)
+        self.video_grid.collection_opened.connect(self.open_collection)
         main_layout.addWidget(self.video_grid, stretch=1)
 
         # 状态栏
@@ -84,6 +89,10 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel('就绪')
         self.status_bar.addWidget(self.status_label)
 
+        # 初始界面：显示最近打开的合集
+        self._update_ui_state()
+        self.show_recent_collections()
+
     def create_toolbar(self):
         """创建顶部工具栏"""
         toolbar = QWidget(self)
@@ -91,15 +100,25 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # 打开文件夹按钮
-        open_btn = QPushButton('📁打开文件夹')
-        open_btn.clicked.connect(self.open_folder)
+        # 新建合集按钮
+        create_btn = QPushButton('➕新建合集')
+        create_btn.clicked.connect(self.create_collection)
+        layout.addWidget(create_btn)
+
+        # 打开合集按钮
+        open_btn = QPushButton('📂打开合集')
+        open_btn.clicked.connect(self.show_open_collection_dialog)
         layout.addWidget(open_btn)
 
+        # 关闭合集按钮
+        self.close_collection_btn = QPushButton('🔒关闭合集')
+        self.close_collection_btn.clicked.connect(self.close_collection)
+        layout.addWidget(self.close_collection_btn)
+
         # 刷新按钮
-        refresh_btn = QPushButton('🔄刷新')
-        refresh_btn.clicked.connect(self.refresh)
-        layout.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton('🔄刷新')
+        self.refresh_btn.clicked.connect(self.refresh)
+        layout.addWidget(self.refresh_btn)
 
         # 返回上级按钮
         self.up_btn = QPushButton('⬆返回上级')
@@ -144,8 +163,14 @@ class MainWindow(QMainWindow):
 
         # 文件菜单
         file_menu = menubar.addMenu('文件(&F)')
-        open_action = file_menu.addAction('打开文件夹...')
-        open_action.triggered.connect(self.open_folder)
+        create_action = file_menu.addAction('新建合集...')
+        create_action.triggered.connect(self.create_collection)
+        open_collection_action = file_menu.addAction('打开合集...')
+        open_collection_action.triggered.connect(self.show_open_collection_dialog)
+        self.close_collection_action = file_menu.addAction('关闭合集')
+        self.close_collection_action.triggered.connect(self.close_collection)
+        self.close_collection_action.setEnabled(False)
+        file_menu.addSeparator()
         self.up_action = file_menu.addAction('返回上级')
         self.up_action.triggered.connect(self.go_up)
         self.up_action.setEnabled(False)
@@ -176,13 +201,13 @@ class MainWindow(QMainWindow):
 
         # 工具菜单
         tools_menu = menubar.addMenu('工具(&T)')
-        clear_cache_action = tools_menu.addAction('清空缩略图缓存')
-        clear_cache_action.triggered.connect(self.clear_thumbnail_cache)
-        clean_missing_action = tools_menu.addAction('清理已失效文件')
-        clean_missing_action.triggered.connect(self.clean_missing_files)
+        self.clear_cache_action = tools_menu.addAction('清空缩略图缓存')
+        self.clear_cache_action.triggered.connect(self.clear_thumbnail_cache)
+        self.clean_missing_action = tools_menu.addAction('清理已失效文件')
+        self.clean_missing_action.triggered.connect(self.clean_missing_files)
         tools_menu.addSeparator()
-        tag_manager_action = tools_menu.addAction('标签管理')
-        tag_manager_action.triggered.connect(self.open_tag_manager)
+        self.tag_manager_action = tools_menu.addAction('标签管理')
+        self.tag_manager_action.triggered.connect(self.open_tag_manager)
 
     def load_videos(self, folder):
         """加载当前文件夹中的子文件夹和视频（不递归）"""
@@ -207,8 +232,10 @@ class MainWindow(QMainWindow):
         folder_count = len(folder_items)
         video_count = len(self.video_paths)
 
-        # 更新统计信息
-        self.stats_label.setText(f'{folder}  -  {folder_count}个文件夹 / {video_count}个视频')
+        # 更新统计信息（未打开合集时不显示合集名）
+        title = f'{self.collection["name"]}  -  ' if self.collection else ''
+        self.stats_label.setText(
+            f'{title}{folder}  -  {folder_count}个文件夹 / {video_count}个视频')
 
         # 加载视频标签
         self.load_video_tags(self.video_paths)
@@ -604,6 +631,8 @@ class MainWindow(QMainWindow):
 
     def open_tag_manager(self):
         """打开标签管理器"""
+        if self.db is None:
+            return
         dialog = TagManagerDialog(self.db, self)
         dialog.exec()
         # 关闭后刷新当前视图，以更新卡片上的标签显示
@@ -611,11 +640,14 @@ class MainWindow(QMainWindow):
             self.load_videos(self.current_folder)
 
     def clear_thumbnail_cache(self):
-        """清空缩略图缓存"""
+        """清空当前合集的缩略图缓存"""
+        if self.db is None:
+            return
+        name = self.collection['name'] if self.collection else ''
         reply = QMessageBox.question(
             self,
             '确认清空',
-            '确定要清空所有缩略图缓存吗？',
+            f'确定要清空合集「{name}」的缩略图缓存吗？',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
@@ -628,6 +660,8 @@ class MainWindow(QMainWindow):
 
     def clean_missing_files(self):
         """清理已失效文件：从数据库中删除磁盘上已不存在的视频信息及标签信息"""
+        if self.db is None:
+            return
         missing_paths = []
         for video in self.db.get_all_videos():
             file_path = video.get('file_path')
@@ -657,17 +691,137 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, '失败', '清理失效文件失败')
 
-    def open_folder(self):
-        """打开文件夹选择对话框"""
-        folder = QFileDialog.getExistingDirectory(
-            self, '选择视频文件夹', self.current_folder, QFileDialog.Option.ShowDirsOnly)
-        if folder:
-            self.folder_stack.clear()
-            # 对话框返回的路径可能含正斜杠，统一规范化后再使用
-            folder = normalize_path(folder)
-            self.current_folder = folder
-            self.update_up_button_state()
-            self.load_videos(folder)
+    def create_collection(self):
+        """新建合集：输入名称与根文件夹，初始化合集数据库后自动打开"""
+        dialog = CreateCollectionDialog(self)
+        if not dialog.exec():
+            return
+
+        try:
+            collection = self.collection_manager.create_collection(
+                dialog.get_name(), dialog.get_folder())
+        except (ValueError, RuntimeError, OSError) as e:
+            QMessageBox.warning(self, '新建合集失败', str(e))
+            return
+
+        self.status_label.setText(f'已创建合集: {collection["name"]}')
+        self.open_collection(collection['id'])
+
+    def show_open_collection_dialog(self):
+        """弹出合集列表，选择要打开的合集"""
+        collections = self.collection_manager.list_collections()
+        if not collections:
+            QMessageBox.information(self, '提示', '还没有合集，请先新建合集')
+            return
+
+        dialog = OpenCollectionDialog(collections, self)
+        if not dialog.exec():
+            return
+
+        collection_id = dialog.get_selected_id()
+        if collection_id is not None:
+            self.open_collection(collection_id)
+
+    def open_collection(self, collection_id):
+        """打开合集：切换数据库与缩略图目录，并加载合集根文件夹"""
+        collection = self.collection_manager.get_collection(collection_id)
+        if not collection:
+            QMessageBox.warning(self, '打开合集失败', '合集不存在或已被删除')
+            return
+
+        folder = normalize_path(collection['folder_path'])
+        if not os.path.isdir(folder):
+            QMessageBox.warning(self, '打开合集失败', f'合集根文件夹不存在:\n{folder}')
+            return
+
+        # 先创建新合集数据库，失败时保持当前合集不变
+        try:
+            db = VideoDatabase(collection['db_path'])
+        except (RuntimeError, OSError) as e:
+            QMessageBox.warning(self, '打开合集失败', f'无法打开合集数据库:\n{e}')
+            return
+
+        # 关闭当前合集，避免两套数据库/缩略图缓存同时生效
+        if self.collection is not None:
+            self._close_current_collection()
+
+        self.db = db
+        self.collection = collection
+        self.collection_manager.mark_opened(collection_id)
+        thumbnail_cache.set_cache_dir(normalize_path(collection['thumbnail_dir']))
+
+        self.folder_stack.clear()
+        self.current_folder = folder
+        self.setWindowTitle(f'VidExplorer - {collection["name"]}')
+
+        # 合集包含根文件夹及其子文件夹中的所有视频，打开时一次性登记到合集数据库
+        self.db.add_missing_videos(self.library.list_videos_recursive(folder))
+
+        self._update_ui_state()
+        self.load_videos(folder)
+
+    def close_collection(self):
+        """关闭合集：保存改动到数据库并回到初始界面"""
+        if self.collection is None:
+            return
+
+        name = self.collection['name']
+        self._close_current_collection()
+        self.current_folder = ''
+        self.video_paths = []
+        self.video_tags_cache.clear()
+
+        # 清空搜索框（blockSignals 避免触发搜索）
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+
+        self.setWindowTitle('VidExplorer - 视频合集')
+        self._update_ui_state()
+        self.show_recent_collections()
+        self.status_label.setText(f'已关闭合集: {name}')
+
+    def _close_current_collection(self):
+        """停止加载线程并关闭当前合集数据库（所有改动已在操作时提交）"""
+        # 递增会话编号，令已排队的加载回调失效（避免关闭后仍写入数据库/界面）
+        self._load_session += 1
+        if self.loader_thread and self.loader_thread.isRunning():
+            self.loader_thread.stop()
+            self.loader_thread.wait()
+        self.loader_thread = None
+
+        if self.db is not None:
+            self.db.close_connection()
+            self.db = None
+
+        self.collection = None
+        self.folder_stack.clear()
+        # 回到缓存的根目录，避免继续写入已关闭合集的缩略图子目录
+        thumbnail_cache.set_cache_dir(DEFAULT_CACHE_DIR)
+
+    def show_recent_collections(self):
+        """初始界面：显示最近打开的 5 个合集"""
+        recent = self.collection_manager.recent_collections(5)
+        self.video_grid.set_collections(recent)
+
+        total = len(self.collection_manager.list_collections())
+        self.stats_label.setText(f'未打开合集  -  共{total}个合集')
+        self.progress_bar.setVisible(False)
+
+    def _update_ui_state(self):
+        """根据是否已打开合集，同步按钮/菜单/搜索框的可用状态"""
+        opened = self.collection is not None
+
+        for widget in (self.refresh_btn, self.tag_manager_btn,
+                       self.search_input, self.search_btn):
+            widget.setEnabled(opened)
+        self.close_collection_btn.setEnabled(opened)
+
+        for action in (self.close_collection_action, self.clear_cache_action,
+                       self.clean_missing_action, self.tag_manager_action):
+            action.setEnabled(opened)
+
+        self.update_up_button_state()
 
     def on_folder_opened(self, folder_path):
         """双击文件夹卡片，进入子文件夹"""
@@ -687,7 +841,7 @@ class MainWindow(QMainWindow):
 
     def update_up_button_state(self):
         """根据导航栈更新返回上级按钮/菜单状态"""
-        has_parent = bool(self.folder_stack)
+        has_parent = self.collection is not None and bool(self.folder_stack)
         if hasattr(self, 'up_btn'):
             self.up_btn.setEnabled(has_parent)
         if hasattr(self, 'up_action'):
@@ -698,7 +852,7 @@ class MainWindow(QMainWindow):
         if self.current_folder:
             self.load_videos(self.current_folder)
         else:
-            QMessageBox.information(self, '提示', '请先打开一个视频文件夹')
+            QMessageBox.information(self, '提示', '请先打开一个合集')
 
     def on_video_clicked(self, video_path):
         """播放视频"""
@@ -868,8 +1022,9 @@ class MainWindow(QMainWindow):
             self.load_videos(self.current_folder)
 
     def closeEvent(self, event):
-        """窗口关闭时停止加载线程"""
+        """窗口关闭时停止加载线程并关闭合集数据库"""
         if self.loader_thread and self.loader_thread.isRunning():
             self.loader_thread.stop()
             self.loader_thread.wait()
+        self._close_current_collection()
         event.accept()

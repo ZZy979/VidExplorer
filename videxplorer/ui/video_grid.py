@@ -1,6 +1,7 @@
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import QScrollArea, QWidget, QGridLayout, QLabel
 
+from .collection_card import CollectionCard
 from .folder_card import FolderCard
 from .video_card import VideoCard
 
@@ -12,6 +13,7 @@ class VideoGrid(QScrollArea):
     video_context_menu_requested = Signal(str, object)
     folder_context_menu_requested = Signal(str, object)  # 文件夹右键菜单
     folder_opened = Signal(str)  # 双击文件夹，发送文件夹路径
+    collection_opened = Signal(int)  # 双击合集卡片，发送合集 ID
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -27,7 +29,7 @@ class VideoGrid(QScrollArea):
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         # 空状态标签
-        self.empty_label = QLabel('请打开视频文件夹\n\n支持格式: mp4, avi, mkv, mov, wmv, flv, webm')
+        self.empty_label = QLabel('请打开合集')
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet("font-size: 14px; padding: 100px 0;")
         self.grid_layout.addWidget(self.empty_label, 0, 0)
@@ -93,6 +95,26 @@ class VideoGrid(QScrollArea):
     def set_videos_with_placeholder(self, video_paths, tags_cache=None):
         """兼容旧接口：仅显示视频（无文件夹卡片）"""
         self.set_entries([], video_paths, tags_cache)
+
+    def set_collections(self, collections):
+        """显示合集卡片（初始界面：最近打开的合集）。
+
+        collections: [{'id': ..., 'name': ..., 'folder_path': ...}, ...]
+        """
+        self.clear_cards()
+        self.empty_label.hide()
+
+        cols = 4
+        for idx, collection in enumerate(collections):
+            row, col = divmod(idx, cols)
+            card = CollectionCard(collection)
+            card.opened.connect(self.collection_opened.emit)
+            self.grid_layout.addWidget(card, row, col)
+            self.card_map[f'collection:{collection["id"]}'] = card
+
+        if not collections:
+            self.empty_label.setText('还没有合集\n\n点击「➕新建合集」创建一个合集')
+            self.empty_label.show()
 
     def update_card_metadata(self, file_path, metadata):
         """更新卡片的元数据（时长）"""

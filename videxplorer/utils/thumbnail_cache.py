@@ -7,11 +7,14 @@ from PySide6.QtGui import QPixmap
 
 from videxplorer.utils.file import get_thumbnail
 
+# 默认缓存的根目录（每个合集在其中有独立子目录）
+DEFAULT_CACHE_DIR = 'data/thumbnails'
+
 
 class ThumbnailCache:
     """缩略图缓存管理器"""
 
-    def __init__(self, cache_dir='data/thumbnails'):
+    def __init__(self, cache_dir):
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -70,6 +73,11 @@ class ThumbnailCache:
             if file.endswith('.jpg'):
                 os.remove(os.path.join(self.cache_dir, file))
 
+    def set_cache_dir(self, cache_dir):
+        """切换缓存目录（每个合集使用独立子目录）"""
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+
     def get_cache_size(self):
         """获取缓存总大小（字节）"""
         total = 0
@@ -80,4 +88,4 @@ class ThumbnailCache:
 
 
 # 全局缓存实例
-thumbnail_cache = ThumbnailCache()
+thumbnail_cache = ThumbnailCache(DEFAULT_CACHE_DIR)

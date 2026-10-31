@@ -9,8 +9,8 @@ from PySide6.QtSql import QSqlDatabase, QSqlQuery
 from videxplorer.utils.path import normalize_path
 
 
-class VideoDatabase:
-    """基于 QtSql 的数据库访问类。
+class SqliteDatabase:
+    """基于 QtSql 的数据库基类，负责连接管理与表结构初始化。
 
     连接管理策略：线程局部变量。
     - Qt 要求 QSqlDatabase 只能在创建它的线程中使用，因此为每个线程维护
@@ -18,10 +18,13 @@ class VideoDatabase:
     - 不再每次查询都新建连接。
     """
 
-    def __init__(self, db_path='data/videos.db'):
+    def __init__(self, db_path, schema_path):
         self.db_path = db_path
+        self.schema_path = schema_path
         self._local = threading.local()
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        dirname = os.path.dirname(db_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
         self.init_tables()
         self._enable_wal()
         atexit.register(self.close_connection)
@@ -70,9 +73,9 @@ class VideoDatabase:
             QSqlDatabase.removeDatabase(conn_name)
 
     def init_tables(self):
-        """初始化数据库表"""
+        """初始化数据库表（按 schema_path 指定的 SQL 脚本执行）"""
         db = self.get_connection()
-        with open('data/videos.sql', encoding='utf-8') as f:
+        with open(self.schema_path, encoding='utf-8') as f:
             script = f.read()
 
         # QSqlQuery.exec 一次只能执行一条语句，需将脚本拆分后逐条执行
@@ -103,6 +106,13 @@ class VideoDatabase:
         """将 QSqlQuery 当前行转换为 dict"""
         record = query.record()
         return {record.fieldName(i): query.value(i) for i in range(record.count())}
+
+
+class VideoDatabase(SqliteDatabase):
+    """视频合集数据库：videos / tags / video_tags 三张表。"""
+
+    def __init__(self, db_path):
+        super().__init__(db_path, 'data/videos.sql')
 
     def _get_video_id(self, file_path):
         """根据路径获取视频ID"""
@@ -153,6 +163,32 @@ class VideoDatabase:
             video_id = self._get_video_id(file_path)
 
         return video_id
+
+    def add_missing_videos(self, video_paths):
+        """批量登记视频路径（已存在的记录保持不变），用于打开合集时扫描根文件夹"""
+        if not video_paths:
+            return True
+
+        db = self.get_connection()
+        if not db.transaction():
+            logging.error(f'开启事务失败: {db.lastError().text()}')
+            return False
+
+        try:
+            query = QSqlQuery(db)
+            query.prepare('INSERT OR IGNORE INTO videos (file_path, title) VALUES (?, ?)')
+            for file_path in video_paths:
+                file_path = normalize_path(file_path)
+                query.bindValue(0, file_path)
+                query.bindValue(1, os.path.basename(file_path))
+                if not query.exec():
+                    raise RuntimeError(f'登记视频失败: {query.lastError().text()}')
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            logging.error(f'add_missing_videos 失败: {e}')
+            return False
 
     def get_video_by_path(self, file_path):
         """根据路径获取视频信息"""
