@@ -468,10 +468,94 @@ class MainWindow(QMainWindow):
         open_action = menu.addAction('打开')
         open_action.triggered.connect(lambda: self.on_folder_opened(folder_path))
 
+        rename_action = menu.addAction('重命名')
+        rename_action.triggered.connect(lambda: self.rename_folder(folder_path))
+
         batch_action = menu.addAction('批量添加标签')
         batch_action.triggered.connect(lambda: self.batch_add_tags_to_folder(folder_path))
 
         menu.exec(pos)
+
+    def rename_folder(self, folder_path):
+        """重命名文件夹：更新磁盘上的文件夹名，并同步数据库中的视频路径"""
+        folder_path = normalize_path(folder_path)
+        old_name = os.path.basename(folder_path)
+
+        dialog = RenameDialog(
+            folder_path, self,
+            title='重命名文件夹',
+            path_label='当前文件夹：',
+            name_label='新文件夹名：',
+            placeholder='输入新文件夹名')
+        if not dialog.exec():
+            return  # 点击取消，不做任何修改
+
+        new_name = dialog.get_new_name()
+        if new_name == old_name:
+            return
+
+        # 新文件夹名不能包含路径分隔符，也不能是 . / ..
+        if os.sep in new_name or (os.altsep and os.altsep in new_name):
+            QMessageBox.warning(self, '重命名失败', '文件夹名不能包含路径分隔符')
+            return
+        if new_name in ('.', '..'):
+            QMessageBox.warning(self, '重命名失败', f'文件夹名无效: {new_name}')
+            return
+
+        new_path = os.path.join(os.path.dirname(folder_path), new_name)
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, '重命名失败', f'目标已存在: {new_name}')
+            return
+
+        # 记录各视频的修改时间，用于重命名后清理旧路径的缩略图缓存
+        old_mtimes = {}
+        for video_path in self.library.list_videos_recursive(folder_path):
+            try:
+                old_mtimes[video_path] = os.stat(video_path).st_mtime
+            except OSError:
+                pass
+
+        try:
+            os.rename(folder_path, new_path)
+        except OSError as e:
+            QMessageBox.warning(self, '重命名失败', f'无法重命名文件夹:\n{e}')
+            return
+
+        new_path = normalize_path(new_path)
+
+        # 同步数据库中的视频路径与标题
+        if self.db.update_folder_path(folder_path, new_path) is None:
+            QMessageBox.warning(
+                self, '警告',
+                '文件夹已重命名，但更新数据库中的视频路径失败，可能需要手动清理失效记录')
+
+        # 清理旧路径的缩略图缓存
+        for video_path, mtime in old_mtimes.items():
+            thumbnail_cache.remove_cache(video_path, mtime)
+
+        # 导航栈与当前文件夹若位于被重命名的文件夹内，同步更新
+        self.folder_stack = [
+            self._replace_folder_prefix(p, folder_path, new_path) for p in self.folder_stack]
+        self.current_folder = self._replace_folder_prefix(
+            self.current_folder, folder_path, new_path)
+
+        self.status_label.setText(f'已重命名文件夹: {old_name} -> {new_name}')
+        if self.current_folder:
+            self.load_videos(self.current_folder)
+
+    @staticmethod
+    def _replace_folder_prefix(path, old_folder, new_folder):
+        """把 path 中被重命名文件夹的路径前缀替换为新路径，无关路径原样返回"""
+        if not path:
+            return path
+
+        old_key = os.path.normcase(old_folder.rstrip('\\/'))
+        path_key = os.path.normcase(path.rstrip('\\/'))
+        if path_key == old_key:
+            return new_folder
+        if path_key.startswith(old_key + os.sep):
+            return new_folder + path[len(old_key):]
+        return path
 
     def batch_add_tags_to_folder(self, folder_path):
         """为该文件夹中的所有视频批量添加标签（只添加，不覆盖）"""

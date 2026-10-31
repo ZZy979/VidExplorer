@@ -502,6 +502,53 @@ class VideoDatabase:
             return False
         return True
 
+    def update_folder_path(self, old_folder, new_folder):
+        """批量更新文件夹（含子文件夹）下所有视频的路径与标题。
+
+        重命名文件夹后调用，保证库中记录的路径跟随磁盘变化。
+        返回 {旧路径: 新路径} 映射；没有匹配记录时返回空字典，
+        查询或写入失败时返回 None。
+        """
+        old_prefix = normalize_path(old_folder).rstrip('\\/') + os.sep
+        new_prefix = normalize_path(new_folder).rstrip('\\/') + os.sep
+
+        db = self.get_connection()
+        query = QSqlQuery(db)
+        if not query.exec('SELECT file_path FROM videos'):
+            logging.error(f'update_folder_path 查询失败: {query.lastError().text()}')
+            return None
+
+        old_prefix_key = os.path.normcase(old_prefix)
+        renames = {}
+        while query.next():
+            file_path = query.value(0)
+            if file_path and os.path.normcase(file_path).startswith(old_prefix_key):
+                # 统一分隔符，兼容库中仍使用正斜杠的存量记录
+                renames[file_path] = normalize_path(new_prefix + file_path[len(old_prefix):])
+        if not renames:
+            return {}
+
+        if not db.transaction():
+            logging.error(f'开启事务失败: {db.lastError().text()}')
+            return None
+
+        update = QSqlQuery(db)
+        update.prepare('UPDATE videos SET file_path = ?, title = ? WHERE file_path = ?')
+        for old_path, new_path in renames.items():
+            update.bindValue(0, new_path)
+            update.bindValue(1, os.path.basename(new_path))
+            update.bindValue(2, old_path)
+            if not update.exec():
+                logging.error(f'update_folder_path 失败: {update.lastError().text()}')
+                db.rollback()
+                return None
+
+        if not db.commit():
+            logging.error(f'提交事务失败: {db.lastError().text()}')
+            db.rollback()
+            return None
+        return renames
+
     def delete_video(self, file_path):
         """删除视频记录及其标签关联"""
         return self.delete_videos([file_path])
