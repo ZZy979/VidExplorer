@@ -213,6 +213,19 @@ class VideoDatabase(SqliteDatabase):
             results.append(self._row_to_dict(query))
         return results
 
+    def get_play_counts(self):
+        """获取所有视频的播放次数 {规范化路径: 次数}"""
+        db = self.get_connection()
+        query = QSqlQuery(db)
+        if not query.exec('SELECT file_path, play_count FROM videos'):
+            logging.error(f'get_play_counts 失败: {query.lastError().text()}')
+            return {}
+
+        counts = {}
+        while query.next():
+            counts[normalize_path(query.value(0))] = query.value(1) or 0
+        return counts
+
     def update_play_count(self, file_path: str):
         """更新播放次数"""
         db = self.get_connection()

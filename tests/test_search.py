@@ -8,8 +8,11 @@ search.py 是纯逻辑模块，不依赖 PySide6 / OpenCV，因此可以直接�
 """
 import os
 import unittest
+from datetime import date
 
-from videxplorer.core.search import build_tag_search, match_paths, parse_query
+from videxplorer.core.search import (
+    SearchQuery, VideoInfo, build_tag_search, match_paths, parse_query
+)
 
 
 def names(paths):
@@ -17,48 +20,127 @@ def names(paths):
     return [os.path.basename(p) for p in paths]
 
 
+def make_query(tags=(), none_tag=False, words=(), dates=(), plays=()):
+    """构造期望的 SearchQuery，便于在表格里书写"""
+    return SearchQuery(list(tags), none_tag, list(words), list(dates), list(plays))
+
+
 class ParseQueryTests(unittest.TestCase):
-    """parse_query：搜索串 -> (tags, none_tag, words)"""
+    """parse_query：搜索串 -> SearchQuery"""
 
     def test_table(self):
         cases = [
             # 需求里的例子
-            ('tag:foo tag:bar baz', (['foo', 'bar'], False, ['baz'])),
+            ('tag:foo tag:bar baz',
+             make_query(tags=['foo', 'bar'], words=['baz'])),
             # 标签名含空格：必须加引号
-            ('tag:"xx xx"', (['xx xx'], False, [])),
+            ('tag:"xx xx"', make_query(tags=['xx xx'])),
             # tag:none 表示「没有任何标签」
-            ('tag:none', ([], True, [])),
+            ('tag:none', make_query(none_tag=True)),
             # 前缀不区分大小写，标签名本身保留原样
-            ('TAG:Foo', (['Foo'], False, [])),
-            ('Tag:foo tAg:bar', (['foo', 'bar'], False, [])),
+            ('TAG:Foo', make_query(tags=['Foo'])),
+            ('Tag:foo tAg:bar', make_query(tags=['foo', 'bar'])),
             # 加引号的 none 是字面标签名，不是「没有标签」
-            ('tag:"none"', (['none'], False, [])),
+            ('tag:"none"', make_query(tags=['none'])),
             # 没有 tag: 前缀的文字只作为标题关键词
-            ('baz', ([], False, ['baz'])),
-            ('"baz qux" simple', ([], False, ['baz qux', 'simple'])),
+            ('baz', make_query(words=['baz'])),
+            ('"baz qux" simple', make_query(words=['baz qux', 'simple'])),
             # tag:none 与标题关键词可以共存
-            ('tag:none 2019', ([], True, ['2019'])),
+            ('tag:none 2019', make_query(none_tag=True, words=['2019'])),
             # 多个条件混合
-            ('tag:foo bar tag:"a b"', (['foo', 'a b'], False, ['bar'])),
+            ('tag:foo bar tag:"a b"',
+             make_query(tags=['foo', 'a b'], words=['bar'])),
         ]
         for text, expected in cases:
             with self.subTest(text=text):
                 self.assertEqual(parse_query(text), expected)
 
     def test_empty_or_incomplete_input(self):
-        """空串 / None / 只有 tag: 前缀时不产生任何条件"""
-        for text in ('', '   ', None, 'tag:', 'tag:""', 'tag:   '):
+        """空串 / None / 只有字段前缀时不产生任何条件"""
+        for text in ('', '   ', None, 'tag:', 'tag:""', 'tag:   ',
+                     'date:', 'play:', 'date:""', 'play:""'):
             with self.subTest(text=text):
-                self.assertEqual(parse_query(text), ([], False, []))
+                self.assertEqual(parse_query(text), make_query())
 
     def test_duplicates_are_deduped(self):
         """重复出现的同一条件只保留一份"""
-        self.assertEqual(parse_query('tag:foo tag:foo'), (['foo'], False, []))
-        self.assertEqual(parse_query('baz baz'), ([], False, ['baz']))
+        self.assertEqual(parse_query('tag:foo tag:foo'),
+                         make_query(tags=['foo']))
+        self.assertEqual(parse_query('baz baz'), make_query(words=['baz']))
+        self.assertEqual(parse_query('play:>0 play:>0'),
+                         make_query(plays=[('>', 0)]))
+        self.assertEqual(parse_query('date:2024-01-01 date:2024-01-01'),
+                         make_query(dates=[('=', date(2024, 1, 1))]))
 
     def test_same_name_as_tag_and_as_word(self):
         """同一个词分别出现在 tag: 和普通位置时，两种条件都会生效"""
-        self.assertEqual(parse_query('tag:foo foo'), (['foo'], False, ['foo']))
+        self.assertEqual(parse_query('tag:foo foo'),
+                         make_query(tags=['foo'], words=['foo']))
+
+
+class ParseDatePlayTests(unittest.TestCase):
+    """parse_query：date: / play: 条件"""
+
+    def test_date_conditions(self):
+        cases = [
+            ('date:2024-01-31', [('=', date(2024, 1, 31))]),
+            ('date:>2024-01-31', [('>', date(2024, 1, 31))]),
+            ('date:>=2024-01-31', [('>=', date(2024, 1, 31))]),
+            ('date:<2024-01-31', [('<', date(2024, 1, 31))]),
+            ('date:<=2024-01-31', [('<=', date(2024, 1, 31))]),
+            # 字段名不区分大小写，闰年日期有效
+            ('DATE:2024-02-29', [('=', date(2024, 2, 29))]),
+            # 值可以加引号
+            ('date:">=2024-01-01"', [('>=', date(2024, 1, 1))]),
+            # 同一天可以叠加多个条件
+            ('date:>=2024-01-01 date:<2024-02-01',
+             [('>=', date(2024, 1, 1)), ('<', date(2024, 2, 1))]),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(parse_query(text), make_query(dates=expected))
+
+    def test_invalid_date_conditions_are_ignored(self):
+        for text in ('date:abc', 'date:2024-13-01', 'date:2024-02-30',
+                     'date:2024-1-1', 'date:20240101', 'date:>', 'date:-2024-01-01'):
+            with self.subTest(text=text):
+                self.assertEqual(parse_query(text), make_query())
+
+    def test_play_conditions(self):
+        cases = [
+            ('play:5', [('=', 5)]),
+            ('play:0', [('=', 0)]),
+            ('play:>0', [('>', 0)]),
+            ('play:>=10', [('>=', 10)]),
+            ('play:<3', [('<', 3)]),
+            ('play:<=3', [('<=', 3)]),
+            # 字段名不区分大小写，值可以加引号
+            ('Play:>2', [('>', 2)]),
+            ('play:">=2"', [('>=', 2)]),
+            # 多个条件叠加
+            ('play:>0 play:<=10', [('>', 0), ('<=', 10)]),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(parse_query(text), make_query(plays=expected))
+
+    def test_invalid_play_conditions_are_ignored(self):
+        for text in ('play:abc', 'play:-1', 'play:1.5', 'play:>', 'play:+3'):
+            with self.subTest(text=text):
+                self.assertEqual(parse_query(text), make_query())
+
+    def test_unknown_field_is_title_word(self):
+        """带冒号但不是已知字段时，整段文字仍按标题关键词搜索"""
+        self.assertEqual(parse_query('star:wars'),
+                         make_query(words=['star:wars']))
+        self.assertEqual(parse_query('http://example.com'),
+                         make_query(words=['http://example.com']))
+
+    def test_all_conditions_combined(self):
+        self.assertEqual(
+            parse_query('tag:foo play:>0 date:>=2024-01-01 baz'),
+            make_query(tags=['foo'], words=['baz'],
+                       dates=[('>=', date(2024, 1, 1))], plays=[('>', 0)]))
 
 
 class BuildTagSearchTests(unittest.TestCase):
@@ -79,10 +161,10 @@ class BuildTagSearchTests(unittest.TestCase):
         """生成出的搜索串再解析回来，应还原成同一个标签条件"""
         for tag in ('foo', 'xx xx', 'a-b', 'x y z'):
             with self.subTest(tag=tag):
-                tags, none_tag, words = parse_query(build_tag_search(tag))
-                self.assertEqual(tags, [tag])
-                self.assertEqual(words, [])
-                self.assertFalse(none_tag)
+                query = parse_query(build_tag_search(tag))
+                self.assertEqual(query.tags, [tag])
+                self.assertEqual(query.words, [])
+                self.assertFalse(query.none_tag)
 
 
 class MatchPathsTests(unittest.TestCase):
@@ -188,6 +270,77 @@ class MatchPathsTests(unittest.TestCase):
 
         self.assertEqual(paths, self.paths)
         self.assertEqual(tags_map, self.tags_map)
+
+
+class MatchPathInfoTests(unittest.TestCase):
+    """match_paths：按播放量 / 日期条件过滤"""
+
+    def setUp(self):
+        videos = os.path.join('videos')
+        self.a = os.path.join(videos, 'a.mp4')
+        self.b = os.path.join(videos, 'b.mp4')
+        self.c = os.path.join(videos, 'c.mp4')
+        self.paths = [self.a, self.b, self.c]
+        self.info_map = {
+            self.a: VideoInfo(play_count=0, modified_date=date(2024, 1, 1)),
+            self.b: VideoInfo(play_count=3, modified_date=date(2024, 6, 15)),
+            self.c: VideoInfo(play_count=10, modified_date=date(2023, 12, 31)),
+        }
+
+    def match(self, text, info_map=None):
+        if info_map is None:
+            info_map = self.info_map
+        return names(match_paths(self.paths, {}, text, info_map))
+
+    def test_play_equal(self):
+        self.assertEqual(self.match('play:3'), ['b.mp4'])
+        self.assertEqual(self.match('play:0'), ['a.mp4'])
+        self.assertEqual(self.match('play:4'), [])
+
+    def test_play_comparisons(self):
+        self.assertEqual(self.match('play:>0'), ['b.mp4', 'c.mp4'])
+        self.assertEqual(self.match('play:>=3'), ['b.mp4', 'c.mp4'])
+        self.assertEqual(self.match('play:<3'), ['a.mp4'])
+        self.assertEqual(self.match('play:<=3'), ['a.mp4', 'b.mp4'])
+
+    def test_play_conditions_are_intersected(self):
+        self.assertEqual(self.match('play:>0 play:<=3'), ['b.mp4'])
+        self.assertEqual(self.match('play:>0 play:<3'), [])
+
+    def test_date_equal(self):
+        self.assertEqual(self.match('date:2024-01-01'), ['a.mp4'])
+        self.assertEqual(self.match('date:2024-01-02'), [])
+
+    def test_date_comparisons(self):
+        # 相同日期的边界：>= 与 <= 都包含当天
+        self.assertEqual(self.match('date:>2024-01-01'), ['b.mp4'])
+        self.assertEqual(self.match('date:>=2024-01-01'), ['a.mp4', 'b.mp4'])
+        self.assertEqual(self.match('date:<2024-01-01'), ['c.mp4'])
+        self.assertEqual(self.match('date:<=2024-01-01'), ['a.mp4', 'c.mp4'])
+
+    def test_date_range(self):
+        self.assertEqual(
+            self.match('date:>=2024-01-01 date:<2024-06-15'), ['a.mp4'])
+
+    def test_info_combined_with_tags_and_title(self):
+        tags_map = {self.a: ['foo'], self.b: ['foo'], self.c: ['foo']}
+        self.assertEqual(
+            names(match_paths(self.paths, tags_map, 'tag:foo play:>0 b',
+                              self.info_map)),
+            ['b.mp4'])
+
+    def test_missing_info_means_unplayed_and_unknown_date(self):
+        video = os.path.join('videos', 'new.mp4')
+        self.assertEqual(names(match_paths([video], {}, 'play:0')), ['new.mp4'])
+        self.assertEqual(names(match_paths([video], {}, 'play:>0')), [])
+        self.assertEqual(
+            names(match_paths([video], {}, 'date:>=2000-01-01')), [])
+        self.assertEqual(names(match_paths([video], {}, 'play:<=0')), ['new.mp4'])
+
+    def test_info_map_is_not_modified(self):
+        info_map = dict(self.info_map)
+        match_paths(self.paths, {}, 'play:>0 date:<2024-06-01', info_map)
+        self.assertEqual(info_map, self.info_map)
 
 
 class NonAsciiSearchTests(unittest.TestCase):

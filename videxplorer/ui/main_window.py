@@ -2,6 +2,7 @@ import os
 import platform
 import shutil
 import subprocess
+from datetime import date
 
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import (
 
 from videxplorer.core.library import VideoLibrary
 from videxplorer.core.loader import VideoLoaderThread
-from videxplorer.core.search import build_tag_search, match_paths
+from videxplorer.core.search import VideoInfo, build_tag_search, match_paths, parse_query
 from videxplorer.models.collection import CollectionManager
 from videxplorer.models.database import VideoDatabase
 from videxplorer.ui.batch_tag_dialog import BatchTagDialog
@@ -131,18 +132,23 @@ class MainWindow(QMainWindow):
         self.tag_manager_btn.clicked.connect(self.open_tag_manager)
         layout.addWidget(self.tag_manager_btn)
 
-        # 搜索框（支持 tag: 语法，搜索当前文件夹及子文件夹，占据剩余空间）
+        # 搜索框（支持 tag:/date:/play: 语法，搜索当前文件夹及子文件夹，占据剩余空间）
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText('搜索标题，或 tag:标签名 ...')
+        self.search_input.setPlaceholderText('搜索标题，或 tag:标签名、date:日期、play:次数 ...')
         self.search_input.setToolTip(
             '搜索语法（多个条件之间取交集）：\n'
             '  • tag:标签名 —— 具有该标签的视频，可重复使用\n'
             '      标签名含空格时加引号，例如 tag:"xx xx"\n'
             '  • tag:none —— 没有任何标签的视频\n'
+            '  • date:日期 —— 按文件修改日期筛选，格式 YYYY-MM-DD\n'
+            '      可加比较符，例如 date:>=2024-01-01\n'
+            '  • play:次数 —— 按播放次数筛选\n'
+            '      可加比较符，例如 play:>0、play:<=10\n'
             '  • 其他文字 —— 标题中包含该文字的视频\n'
             '\n'
-            '例如：tag:foo tag:bar baz\n'
-            '表示「同时具有标签 foo 和 bar，且标题包含 baz 的视频」\n'
+            '例如：tag:foo play:>0 date:>=2024-01-01 baz\n'
+            '表示「同时具有标签 foo、播放过、修改日期不早于 2024-01-01，\n'
+            '且标题包含 baz 的视频」\n'
             '\n'
             '搜索范围为当前文件夹及其所有子文件夹。'
         )
@@ -341,6 +347,14 @@ class MainWindow(QMainWindow):
         except OSError:
             return 0
 
+    @staticmethod
+    def _file_date(path):
+        """获取视频的修改日期（与视频卡片上显示的日期一致，未知时返回 None）"""
+        try:
+            return date.fromtimestamp(os.path.getmtime(path))
+        except (OSError, OverflowError, ValueError):
+            return None
+
     def _sort_folders(self, folder_items):
         """对子文件夹排序：按文件名升序（默认）或修改时间降序。
 
@@ -437,8 +451,26 @@ class MainWindow(QMainWindow):
         tags_map = {normalize_path(path): tags
                     for path, tags in self.db.get_videos_with_tags().items()}
 
-        matched_paths = match_paths(all_paths, tags_map, query)
+        # 播放量/日期条件所需的视频信息，仅在用到时才收集
+        info_map = self._build_search_info(all_paths, query)
+
+        matched_paths = match_paths(all_paths, tags_map, query, info_map)
         self._show_search_results(matched_paths, query)
+
+    def _build_search_info(self, video_paths, query):
+        """收集播放次数与修改日期，供 match_paths 判断 play:/date: 条件"""
+        parsed = parse_query(query)
+        if not (parsed.plays or parsed.dates):
+            return {}
+
+        play_counts = self.db.get_play_counts() if parsed.plays else {}
+        info_map = {}
+        for path in video_paths:
+            info_map[path] = VideoInfo(
+                play_count=play_counts.get(normalize_path(path), 0),
+                modified_date=self._file_date(path) if parsed.dates else None,
+            )
+        return info_map
 
     def _show_search_results(self, matched_paths, query):
         """显示搜索结果"""
